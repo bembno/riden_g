@@ -40,7 +40,7 @@ class Meter:
                 sys.exit(f"Serial port {self.port} could not be read: {e}")
             line = self.parse_line(raw)
             if line:
-                print(line)
+                #print(line)
                 parsed_data.append(line)
             lines.append(raw)
         return parsed_data
