@@ -121,8 +121,18 @@ class BatLoad:
         # 1-0:1.7.0 = import (+P), 1-0:2.7.0 = export (-P), both in kW
         export_p_row = df[df['OBIS'] == '1-0:2:.7.0']
         import_p_row = df[df['OBIS'] == '1-0:1:.7.0']
-        export_p = float(export_p_row.iloc[0]['Value']) if not export_p_row.empty else 0.0
-        import_p = float(import_p_row.iloc[0]['Value']) if not import_p_row.empty else 0.0
+        export_p = 0.0
+        import_p = 0.0
+        if not export_p_row.empty:
+            try:
+                export_p = float(export_p_row.iloc[0]['Value'])
+            except Exception:
+                export_p = 0.0
+        if not import_p_row.empty:
+            try:
+                import_p = float(import_p_row.iloc[0]['Value'])
+            except Exception:
+                import_p = 0.0
         # If export (-P) is positive, we want to absorb it (charge battery)
         # If import (+P) is positive, do not charge
         if export_p > 0:
