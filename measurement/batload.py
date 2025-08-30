@@ -126,19 +126,13 @@ class BatLoad:
         # If imported_kwh > exported_kwh, we are net importer, so do not charge
         net_kwh = exported_kwh - imported_kwh
         if net_kwh > 0 or export_kw > 0:
-            min_voltage = min([v for v in voltages.values() if v is not None], default=self.max_voltage)
-            if min_voltage < 210:  # Example threshold for low voltage
-                print("Warning: Low grid voltage detected, reducing charging current.")
-                voltage_v = self.max_voltage
-                required_current = ((export_kw * 1000) / voltage_v) * 0.5  # Reduce by 50%
-            else:
-                voltage_v = self.max_voltage
-                # Use both net_kwh and export_kw to determine charging current
-                # If net_kwh is large, be more aggressive
-                # Scale net_kwh to kW for current calculation (approximate, as interval is not known)
-                net_kw = net_kwh * 0.2  # Assume 0.2h (12 min) interval for smoothing
-                total_export_kw = max(export_kw, net_kw)
-                required_current = (total_export_kw * 1000) / voltage_v if voltage_v > 0 else 0.0
+            voltage_v = self.max_voltage
+            # Use both net_kwh and export_kw to determine charging current
+            # If net_kwh is large, be more aggressive
+            # Scale net_kwh to kW for current calculation (approximate, as interval is not known)
+            net_kw = net_kwh * 0.2  # Assume 0.2h (12 min) interval for smoothing
+            total_export_kw = max(0, net_kw)
+            required_current = (total_export_kw * 1000) / voltage_v if voltage_v > 0 else 0.0
         else:
             required_current = 0.0
 
