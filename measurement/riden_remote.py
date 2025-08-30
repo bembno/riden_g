@@ -3,6 +3,12 @@ import socket
 import json
 
 class RidenRemote:
+    def set_output(self, output: bool):
+        """
+        Enable or disable output on the Riden device.
+        """
+        resp = self.send_command("set_output", args=[output])
+        return resp.get("result", resp)
     def __init__(self, ip="192.168.2.29", port=6030):
         self.ip = ip
         self.port = port
