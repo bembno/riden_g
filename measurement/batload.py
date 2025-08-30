@@ -111,9 +111,26 @@ class BatLoad:
     def run(self):
         self.meter.connect()
         last_riden_error = None
+        required_obis = [
+            '1-3:0:.2.8', '0-0:1:.0.0', '0-0:96:.1.1', '1-0:1:.8.1', '1-0:1:.8.2',
+            '1-0:2:.8.1', '1-0:2:.8.2', '0-0:96:.14.0', '1-0:1:.7.0', '1-0:2:.7.0',
+            '0-0:96:.7.21', '0-0:96:.7.9', '1-0:99:.97.0', '1-0:32:.32.0', '1-0:52:.32.0',
+            '1-0:72:.32.0', '1-0:32:.36.0', '1-0:52:.36.0', '1-0:72:.36.0', '1-0:32:.7.0',
+            '1-0:52:.7.0', '1-0:72:.7.0', '1-0:31:.7.0', '1-0:51:.7.0', '1-0:71:.7.0', '1-0:21:.7.0'
+        ]
         try:
             while True:
-                parsed_data = self.meter.read_lines(20)
+                # Actively read lines until all required OBIS codes are received
+                parsed_data = []
+                obis_found = set()
+                while True:
+                    raw = self.meter.ser.readline()
+                    line = self.meter.parse_line(raw)
+                    if line and line['OBIS'] not in obis_found:
+                        parsed_data.append(line)
+                        obis_found.add(line['OBIS'])
+                    if all(obis in obis_found for obis in required_obis):
+                        break
                 df = self.meter.to_dataframe(parsed_data)
                 error_msg = None
                 value_row = df[df['OBIS'] == '1-0:2:.7.0']
@@ -124,6 +141,7 @@ class BatLoad:
                     print(f"Actual exported power (to grid, -P): {value} {unit}")
                     try:
                         required_current = self.calculate_required_consumption(df)
+                        required_current = required_current / 10
                         print(f"Calculated required battery current: {required_current:.2f} A")
                         # Set Riden voltage to self.max_voltage
                         v_set_result = self.riden.set_v_set(self.max_voltage)
