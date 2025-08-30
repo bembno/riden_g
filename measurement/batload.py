@@ -4,6 +4,9 @@ from P1uitlezen import Meter
 from datetime import datetime
 
 class BatLoadLogger:
+    GREEN = "\033[32m"
+    BLUE = "\033[34m"
+    YELLOW = "\033[33m"
     LOG_FILE = "log.txt"
     MAGENTA = "\033[35m"
     RESET = "\033[0m"
@@ -19,22 +22,21 @@ class BatLoadLogger:
 
 class BatLoad:
 
-    def print_status(self, v_out, i_out, export_kw, consumption_kw, imported_kwh, exported_kwh, voltages, currents, tariff, required_current=None, value=None, unit=None, predicted_next=None, v_set_result=None, i_set_result=None, riden_error=None):
+    def print_status(self, v_out, i_out, export_kw, consumption_kw, imported_kwh, exported_kwh, voltages, currents, required_current=None, value=None, unit=None, predicted_next=None, v_set_result=None, i_set_result=None, riden_error=None):
         print(f"Riden actual output voltage [V] (measured at output terminals): {v_out}")
         print(f"Riden actual output current [A] (measured at output terminals): {i_out}")
-        print(f"Exported power to grid (all phases) [kW] (sum of all phases, positive means export): {export_kw:.3f}")
-        print(f"Total consumption (all phases) [kW] (sum of all phases, positive means import): {consumption_kw:.3f}")
+        print(f"{BatLoadLogger.GREEN}Exported power to grid (all phases) [kW] (sum of all phases, positive means export): {export_kw:.3f}{BatLoadLogger.RESET}")
+        print(f"{BatLoadLogger.BLUE}Total consumption (all phases) [kW] (sum of all phases, positive means import): {consumption_kw:.3f}{BatLoadLogger.RESET}")
         print(f"Imported energy from grid [kWh] (cumulative, import from grid): {imported_kwh:.3f}")
         print(f"Exported energy to grid [kWh] (cumulative, export to grid): {exported_kwh:.3f}")
         print(f"Phase voltages [V] (L1/L2/L3, measured at meter): {voltages}")
         print(f"Phase currents [A] (L1/L2/L3, measured at meter): {currents}")
-        print(f"Tariff indicator (from P1, e.g. 1=low, 2=high): {tariff}")
         if value is not None and unit is not None:
             print(f"Actual exported power (to grid, -P) [{unit}] (from P1 OBIS 1-0:2.7.0): {value}")
         if required_current is not None:
             print(f"Calculated required battery current (capped) [A] (to minimize grid export): {required_current:.2f}")
         if predicted_next is not None:
-            print(f"Predicted next required battery current (moving average) [A]: {predicted_next:.2f}")
+            print(f"Predicted next required battery current (moving average) [A]: {BatLoadLogger.YELLOW}{predicted_next:.2f}{BatLoadLogger.RESET}")
         if v_set_result is not None:
             print(f"Set Riden voltage to {self.max_voltage}V (command result): {v_set_result}")
         if i_set_result is not None:
@@ -110,29 +112,21 @@ class BatLoad:
             except Exception:
                 currents[phase] = None
 
-        # Tariff indicator (could be used to prefer charging during low tariff)
-        tariff = None
-        tariff_row = df[df['OBIS'] == '0-0:96:.14.0']
-        if not tariff_row.empty:
-            try:
-                tariff = int(tariff_row.iloc[0]['Value'])
-            except Exception:
-                tariff = None
-
+     
     # Print for diagnostics (now handled in print_status)
 
-        # Adjust battery charging to minimize return to grid, considering net energy
-        # If exported_kwh > imported_kwh, we are net exporter, so increase load
-        # If imported_kwh > exported_kwh, we are net importer, so do not charge
-        net_kwh = exported_kwh - imported_kwh
-        if net_kwh > 0 or export_kw > 0:
+        # Use instantaneous power values for current calculation
+        # 1-0:1.7.0 = import (+P), 1-0:2.7.0 = export (-P), both in kW
+        export_p_row = df[df['OBIS'] == '1-0:2:.7.0']
+        import_p_row = df[df['OBIS'] == '1-0:1:.7.0']
+        export_p = float(export_p_row.iloc[0]['Value']) if not export_p_row.empty else 0.0
+        import_p = float(import_p_row.iloc[0]['Value']) if not import_p_row.empty else 0.0
+        # If export (-P) is positive, we want to absorb it (charge battery)
+        # If import (+P) is positive, do not charge
+        if export_p > 0:
             voltage_v = self.max_voltage
-            # Use both net_kwh and export_kw to determine charging current
-            # If net_kwh is large, be more aggressive
-            # Scale net_kwh to kW for current calculation (approximate, as interval is not known)
-            net_kw = net_kwh * 0.2  # Assume 0.2h (12 min) interval for smoothing
-            total_export_kw = max(0, net_kw)
-            required_current = (total_export_kw * 1000) / voltage_v if voltage_v > 0 else 0.0
+            required_current = ((export_p-import_p) * 1000) / voltage_v if voltage_v > 0 else 0.0
+            required_current=max(required_current,0)    
         else:
             required_current = 0.0
 
@@ -237,7 +231,7 @@ class BatLoad:
                     unit = value_row.iloc[0]['Unit']
                     try:
                         required_current = self.calculate_required_consumption(df)
-                        required_current = required_current / 10
+                        #required_current = required_current / 10
                         # Enforce max charging current
                         if required_current > self.max_charging_current:
                             required_current = self.max_charging_current
@@ -265,7 +259,7 @@ class BatLoad:
                         BatLoadLogger.print_magenta(error_msg)
                 # Centralized printing
                 self.print_status(
-                    v_out, i_out, export_kw, consumption_kw, imported_kwh, exported_kwh, voltages, currents, tariff,
+                    v_out, i_out, export_kw, consumption_kw, imported_kwh, exported_kwh, voltages, currents,
                     required_current, value, unit, predicted_next, v_set_result, i_set_result, riden_error
                 )
                 # Log error every 5 seconds
