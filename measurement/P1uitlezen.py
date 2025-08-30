@@ -63,7 +63,7 @@ class Meter:
         return None
 
     def obis_description(self, obis_code):
-        # Dictionary of OBIS code descriptions (updated to match the provided OBIS codes)
+        # Dictionary of OBIS code descriptions (no duplicates)
         descriptions = {
             '1-3:0:.2.8': 'DSMR version',
             '0-0:1:.0.0': 'Timestamp',

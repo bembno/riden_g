@@ -22,7 +22,7 @@ class BatLoadLogger:
 
 class BatLoad:
 
-    def print_status(self, v_out, i_out, export_kw, consumption_kw, imported_kwh, exported_kwh, voltages, currents, required_current=None, value=None, unit=None, predicted_next=None, v_set_result=None, i_set_result=None, riden_error=None):
+    def print_status(self, v_out, i_out, export_kw, consumption_kw, imported_kwh, exported_kwh, voltages, currents, import_p=None, export_p=None, required_current=None, predicted_next=None, v_set_result=None, i_set_result=None, riden_error=None):
         print(f"Riden actual output voltage [V] (measured at output terminals): {v_out}")
         print(f"Riden actual output current [A] (measured at output terminals): {i_out}")
         print(f"{BatLoadLogger.GREEN}Exported power to grid (all phases) [kW] (sum of all phases, positive means export): {export_kw:.3f}{BatLoadLogger.RESET}")
@@ -31,8 +31,10 @@ class BatLoad:
         print(f"Exported energy to grid [kWh] (cumulative, export to grid): {exported_kwh:.3f}")
         print(f"Phase voltages [V] (L1/L2/L3, measured at meter): {voltages}")
         print(f"Phase currents [A] (L1/L2/L3, measured at meter): {currents}")
-        if value is not None and unit is not None:
-            print(f"Actual exported power (to grid, -P) [{unit}] (from P1 OBIS 1-0:2.7.0): {value}")
+        if import_p is not None:
+            print(f"Actual electricity power delivered (+P) [kW] (from P1 OBIS 1-0:1.7.0): {import_p}")
+        if export_p is not None:
+            print(f"Actual electricity power received (-P) [kW] (from P1 OBIS 1-0:2.7.0): {export_p}")
         if required_current is not None:
             print(f"Calculated required battery current (capped) [A] (to minimize grid export): {required_current:.2f}")
         if predicted_next is not None:
@@ -222,13 +224,23 @@ class BatLoad:
                         tariff = int(tariff_row.iloc[0]['Value'])
                     except Exception:
                         tariff = None
-                value_row = df[df['OBIS'] == '1-0:2:.7.0']
-                value = unit = None
                 required_current = predicted_next = v_set_result = i_set_result = riden_error = None
-                if not value_row.empty:
+                import_p_row = df[df['OBIS'] == '1-0:1:.7.0']
+                export_p_row = df[df['OBIS'] == '1-0:2:.7.0']
+                import_p = None
+                export_p = None
+                if not import_p_row.empty:
+                    try:
+                        import_p = float(import_p_row.iloc[0]['Value'])
+                    except Exception:
+                        import_p = None
+                if not export_p_row.empty:
+                    try:
+                        export_p = float(export_p_row.iloc[0]['Value'])
+                    except Exception:
+                        export_p = None
+                if not export_p_row.empty:
                     self.missing_count = 0
-                    value = value_row.iloc[0]['Value']
-                    unit = value_row.iloc[0]['Unit']
                     try:
                         required_current = self.calculate_required_consumption(df)
                         #required_current = required_current / 10
@@ -260,7 +272,8 @@ class BatLoad:
                 # Centralized printing
                 self.print_status(
                     v_out, i_out, export_kw, consumption_kw, imported_kwh, exported_kwh, voltages, currents,
-                    required_current, value, unit, predicted_next, v_set_result, i_set_result, riden_error
+                    import_p, export_p,
+                    required_current, predicted_next, v_set_result, i_set_result, riden_error
                 )
                 # Log error every 5 seconds
                 if error_msg:
