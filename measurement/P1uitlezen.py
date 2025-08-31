@@ -25,7 +25,7 @@ class Meter:
         self.ser.port = self.port
         try:
             self.ser.open()
-            print(f"Connected to {self.port}")
+            #print(f"Connected to {self.port}")
         except Exception as e:
             sys.exit(f"Error opening {self.port}: {e}")
 
@@ -100,48 +100,12 @@ class Meter:
             df['Description'] = df['OBIS'].apply(lambda obis: self.obis_description(obis))
         return df
 
-    # def power_in_out(self, parsed_data):
-    #     """
-    #     Extracts and returns a DataFrame with only the information about energy taken from or provided to the grid for each phase.
-    #     Includes:
-    #     - 1-0:1.8.1: Energy delivered to client (Tariff 1)
-    #     - 1-0:1.8.2: Energy delivered to client (Tariff 2)
-    #     - 1-0:2.8.1: Energy delivered by client (Tariff 1)
-    #     - 1-0:2.8.2: Energy delivered by client (Tariff 2)
-    #     - 1-0:1.7.0: Actual power delivered (+P)
-    #     - 1-0:2.7.0: Actual power received (-P)
-    #     """
-    #     obis_interest = [
-    #         '1-0:1.8.1', '1-0:1.8.2', '1-0:2.8.1', '1-0:2.8.2',
-    #         '1-0:1.7.0', '1-0:2.7.0'
-    #     ]
-    #     df = pd.DataFrame(parsed_data)
-    #     if not df.empty:
-    #         df = df[df['OBIS'].isin(obis_interest)].copy()
-    #         df['Description'] = df['OBIS'].apply(lambda obis: self.obis_description(obis))
-    #     return df
-
-    def get_obis_values(self, df, obis_list):
-        """
-        Given a DataFrame and a list of OBIS codes, return a list of float values (or None if not available/conversion fails) for each OBIS code.
-        """
-        values = []
-        for obis in obis_list:
-            row = df[df['OBIS'] == obis]
-            if not row.empty:
-                try:
-                    values.append(float(row.iloc[0]['Value']))
-                except Exception:
-                    values.append(None)
-            else:
-                values.append(None)
-        return values
 
     def close(self):
         if self.ser:
             try:
                 self.ser.close()
-                print(f"Serial port {self.port} closed.")
+                #print(f"Serial port {self.port} closed.")
             except Exception as e:
                 sys.exit(f"Oops {self.port}. Program aborted. Could not close the serial port: {e}")
 
