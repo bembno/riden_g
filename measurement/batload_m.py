@@ -6,7 +6,7 @@ from datetime import datetime
 
 
 class PIDController:
-    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0):
+    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0, output_limits=(0, None)):
         self.kp = kp
         self.ki = ki
         self.kd = kd
@@ -14,18 +14,51 @@ class PIDController:
         self.integral = 0.0
         self.last_error = 0.0
         self.last_time = None
+        self.output_limits = output_limits  # (min, max)
 
     def update(self, measured_value):
-        error = self.setpoint - measured_value
+        error = measured_value-self.setpoint   # Note: setpoint - measured_value for standard PID
         now = time.time()
-        dt = 1.0
-        if self.last_time is not None:
-            dt = now - self.last_time
+        
+        # Handle first call
+        if self.last_time is None:
+            self.last_time = now
+            self.last_error = error
+            return 0.0
+        
+        dt = now - self.last_time
+        if dt <= 0:
+            return 0.0
+        
+        # Proportional term
+        p_term = self.kp * error
+        
+        # Integral term with anti-windup
         self.integral += error * dt
-        derivative = (error - self.last_error) / dt if dt > 0 else 0.0
-        output = self.kp * error + self.ki * self.integral + self.kd * derivative
+        i_term = self.ki * self.integral
+        
+        # Derivative term
+        derivative = (error - self.last_error) / dt
+        d_term = self.kd * derivative
+        
+        # Calculate output
+        output = p_term + i_term + d_term
+        
+        # Apply output limits with anti-windup
+        if self.output_limits[0] is not None and output < self.output_limits[0]:
+            output = self.output_limits[0]
+            # Anti-windup: don't accumulate integral if output is limited
+            self.integral -= error * dt
+        
+        if self.output_limits[1] is not None and output > self.output_limits[1]:
+            output = self.output_limits[1]
+            # Anti-windup
+            self.integral -= error * dt
+        
         self.last_error = error
         self.last_time = now
+        
+        print(f"PID Debug -> Error: {error:.2f}, P: {p_term:.2f}, I: {i_term:.2f}, D: {d_term:.2f}, Output: {output:.2f}")
         return output
 
 class BatLoader:
@@ -41,8 +74,9 @@ class BatLoader:
         self.max_current=max_current
         self.meter = Meter()
         self.riden = RidenRemote(ip=riden_ip, port=6030)  # Set your Riden's IP and port
-        self.pid = PIDController(kp=2.0, ki=0.1, kd=0.05, setpoint=0.0)  # Tune as needed
-
+         # Increase kp and kd for faster response, reduce ki to avoid windup
+        self.pid = PIDController(kp=1.0, ki=0.5, kd=0.5, setpoint=0.0)
+    
     def get_all_riden_to_df(self):
         self.meter.connect()
         parsed_data = self.meter.read_lines(25)
@@ -63,81 +97,126 @@ class BatLoader:
                 values.append(None)
         return values
 
-    # def current_to_battery(self, power_diff):
-        
-    #     current=(power_diff * 1000) / self.battery_voltage
-        
-    #     return current
-
-    # def required_current(self):
-    #     df = self.get_all_riden_to_df()
-    #     obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0']
-    #     import_p, export_p = self.get_obis_values(df, obis_codes)
-    #     power_diff = export_p - import_p if import_p is not None and export_p is not None else None
-                
-    #     if power_diff is not None:
-    #         required_current = self.current_to_battery(power_diff)
-    #         print(f"received (-P):{BatLoader.BLUE}{import_p}{BatLoader.RESET}[kW],delivered (+P): {BatLoader.GREEN}{export_p}{BatLoader.RESET}[kW], power_diff: {power_diff:.2} [kW], cal current: {BatLoader.YELLOW}{required_current:.2f}{BatLoader.RESET} [A]")
-    #         return required_current
-    #     else:
-    #         print("Could not calculate required current due to missing OBIS values.")
-    #         return 0.0
-        
+ 
 
     def required_current_pid(self):
-        df = self.get_all_riden_to_df()
-        obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0']
-        import_p, export_p = self.get_obis_values(df, obis_codes)
-        power_diff = export_p - import_p if import_p is not None and export_p is not None else None
-        if power_diff is not None:
-            # PID output is the adjustment to current to drive power_diff to zero
+        try:
+            df = self.get_all_riden_to_df()
+            if df is None or df.empty:
+                print("No data received from meter")
+                return 0.0
+                
+            obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0']
+            import_p, export_p = self.get_obis_values(df, obis_codes)
+            
+            if import_p is None or export_p is None:
+                print("Missing OBIS values")
+                return 0.0
+            export_p=0.4
+            power_diff = export_p - import_p
             pid_output = self.pid.update(power_diff)
-            #print(f"PID: power_diff={power_diff:.3f} [kW], pid_output={pid_output:.3f} [A]")
-            print(f"received (-P):{BatLoader.BLUE}{import_p}{BatLoader.RESET}[kW],delivered (+P): {BatLoader.GREEN}{export_p}{BatLoader.RESET}[kW], power_diff: {power_diff:.2} [kW], cal current: {BatLoader.YELLOW}{pid_output:.2f}{BatLoader.RESET} [A]")
-            return max(0.0, pid_output)
-        else:
-            print("Could not calculate required current due to missing OBIS values.")
+            
+            # Clamp output to safe range
+            safe_current = max(0.0, min(self.max_current, pid_output))
+            print(
+                    f"received (-P):{BatLoader.BLUE}{import_p:.2f}{BatLoader.RESET}[kW], "
+                    f"delivered (+P): {BatLoader.GREEN}{export_p:.2f}{BatLoader.RESET}[kW], "
+                    f"power_diff:{BatLoader.MAGENTA} {power_diff:.2f} {BatLoader.RESET}[kW], "
+                    f"cal current: {BatLoader.YELLOW}{safe_current:.2f}{BatLoader.RESET} [A] "
+                )  
+            # print(f"Import: {import_p:.2f}kW, Export: {export_p:.2f}kW, "
+            #     f"Diff: {power_diff:.2f}kW, Current: {safe_current:.2f}A")
+            
+            return safe_current
+            
+        except Exception as e:
+            print(f"Error in required_current_pid: {e}")
             return 0.0
+            
+            
     def riden_drv(self):
-        #required_current=self.required_current()
-        required_current=self.required_current_pid()
-        required_current_min = max(0, required_current)
-        required_current = min(self.max_current, required_current_min)  # Limit to max current
-        self.riden.set_v_set(self.battery_voltage)
+            try:
+                required_current = self.required_current_pid()
+                    
+                    # Set voltage and current
+                self.riden.set_v_set(self.battery_voltage)
+                self.riden.send_command('set_i_set', args=[required_current])
+                self.riden.set_output(True)
+                    
+                    # Read back actual values for verification
+                v_out = self.riden.send_command('get_v_out').get('result', 'N/A')
+                i_out = self.riden.send_command('get_i_out').get('result', 'N/A')
+                    
+                print(f"Riden Status - Voltage: {v_out}V, Current: {i_out}A")
+                    
+            except Exception as e:
+                print(f"Error in riden_drv: {e}")
+                    # Consider turning output off on error
+                try:
+                    self.riden.set_output(False)
+                except:
+                    pass
 
-        self.riden.send_command('set_i_set', args=[required_current])
-        
-        print(f"Set voltage to {self.battery_voltage:.2f}V")
-        print(f"Set current to {required_current:.2f}A: ")
-        v_out = self.riden.send_command('get_v_out').get('result', None)
-        i_out = self.riden.send_command('get_i_out').get('result', None)
-        print(f"Riden Output - Voltage: {v_out} V, Current: {i_out} A")
+
+
+
+            # #required_current=self.required_current()
+            # #self.riden.set_output(False)   # Turn output Off  
+            # required_current=self.required_current_pid()
+            # required_current_min = max(0, required_current)
+            # required_current = min(self.max_current, required_current_min)  # Limit to max current
+            # self.riden.set_v_set(self.battery_voltage)
+
+            # self.riden.send_command('set_i_set', args=[required_current])
+
     
-        # Set output ON or OFF
-        self.riden.set_output(True)   # Turn output ON
-        # riden.set_output(False)  # Turn output OFF
+            # #print(f"Set voltage to {self.battery_voltage:.2f}V")
+            # #print(f"Set current to {required_current:.2f}A: ")
+            # v_out = self.riden.send_command('get_v_out').get('result', None)
+            # i_out = self.riden.send_command('get_i_out').get('result', None)
+            # print(f"Riden Output - Voltage: {v_out} V, Current: {i_out} A")
+        
+            # # Set output ON or OFF
+            # self.riden.set_output(True)   # Turn output ON
+            # riden.set_output(False)  # Turn output OFF
 
-        # # Set voltage (in Volts)
-        # riden.set_v_set(12.5)    # Set output voltage to 12.5V
+            # # Set voltage (in Volts)
+            # riden.set_v_set(12.5)    # Set output voltage to 12.5V
 
-        # # Set current (in Amps)
-        # riden.send_command('set_i_set', args=[2.0])  # Set output current to 2.0A
+            # # Set current (in Amps)
+            # riden.send_command('set_i_set', args=[2.0])  # Set output current to 2.0A
 
-        # # Set power (in Watts) - if supported by your model/firmware
-        # riden.send_command('set_p_set', args=[30.0])  # Set output power to 30W
+            # # Set power (in Watts) - if supported by your model/firmware
+            # riden.send_command('set_p_set', args=[30.0])  # Set output power to 30W
 
-        # # You can also read back values:
-        # v_out = riden.send_command('get_v_out').get('result')
-        # i_out = riden.send_command('get_i_out').get('result')"
-
-
+            # # You can also read back values:
+            # v_out = riden.send_command('get_v_out').get('result')
+            # i_out = riden.send_command('get_i_out').get('result')"
+    def log_message(self, message):
+        with open(self.LOG_FILE, 'a') as f:
+            f.write(f"{datetime.now().isoformat()}: {message}\n")
+        print(message)
 
         
 if __name__ == "__main__":
-    bat_loader=BatLoader(battery_voltage=25.2,max_current=5)
-    while True:
-        print(f"\n--- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
-        bat_loader.riden_drv()
-        time.sleep(1)  # Wait for 60 seconds before next adjustment
+    bat_loader = BatLoader(battery_voltage=50.4, max_current=5)
+    
+    # Add graceful shutdown handling
+    try:
+        while True:
+            print(f"\n--- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+            bat_loader.riden_drv()
+            time.sleep(1)
+            
+    except KeyboardInterrupt:
+        print("\nShutting down gracefully...")
+        # Turn off output on shutdown
+        try:
+            bat_loader.riden.set_output(False)
+            print("Output turned off")
+        except:
+            pass
+    except Exception as e:
+        print(f"Unexpected error: {e}")
 
 
