@@ -1,4 +1,4 @@
-from riden import Riden
+from riden.riden import Riden
 
 # These are the default values for port, baudrate, and address
 r = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)

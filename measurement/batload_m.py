@@ -48,7 +48,7 @@ class BatLoader:
 
     RESET = "\033[0m"
     LOG_FILE = "log.csv"
-    def __init__(self, battery_voltage=25.2,max_current=1, riden_ip="192.168.2.29" ):
+    def __init__(self, battery_voltage=25.2,max_current=1, riden_ip="192.168.2.38" ):
         self.battery_voltage = battery_voltage
         self.max_current=max_current
         self.meter = Meter()
@@ -159,7 +159,7 @@ class BatLoader:
 
         
 if __name__ == "__main__":
-    bat_loader=BatLoader(battery_voltage=42,max_current=5)
+    bat_loader=BatLoader(battery_voltage=57,max_current=5)
     while True:
         print(f"\n--- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
         bat_loader.riden_drv()

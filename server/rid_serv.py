@@ -3,13 +3,16 @@ import socket
 import threading
 import json
 import traceback
-
+import os
+import signal
+import subprocess
 from riden.riden import Riden
 import time
 
 
 # Robust Riden instance creation
 riden = None
+server_socket = None  # global
 riden_status = {"ok": False, "last_error": None, "ttl": 0}
 try:
     riden = Riden()
@@ -99,8 +102,10 @@ def get_local_ip():
     return ip
 
 def start_server(host=None, port=6030):
+    global server_socket
     if host is None:
         host = get_local_ip()
+    free_port(port)
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((host, port))
@@ -114,7 +119,50 @@ def start_server(host=None, port=6030):
     except KeyboardInterrupt:
         print("Server shutting down.")
     finally:
-        server_socket.close()
+        close_server()
+
+
+def close_server():
+    global server_socket
+    if server_socket:
+        try:
+            server_socket.close()
+            print("Server socket closed.")
+        except Exception as e:
+            print(f"Error closing socket: {e}")
+        finally:
+            server_socket = None
+
+def free_port(port: int):
+    """
+    Check if a TCP port is in use, kill the process using it, and wait until the port is free.
+    """
+    while True:
+        try:
+            # Get all PIDs using this port
+            result = subprocess.run(
+                ["lsof", "-ti", f"tcp:{port}"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            pids = result.stdout.strip().splitlines()
+        except Exception as e:
+            print(f"Error checking port {port}: {e}")
+            pids = []
+
+        if not pids:
+            break  # port is free
+
+        for pid in pids:
+            try:
+                print(f"Killing process {pid} using port {port}")
+                os.kill(int(pid), signal.SIGKILL)
+            except Exception as e:
+                print(f"Failed to kill process {pid}: {e}")
+
+        time.sleep(0.5)
+
 
 if __name__ == "__main__":
     # Start error service thread
