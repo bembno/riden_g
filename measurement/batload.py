@@ -160,8 +160,11 @@ class BatLoader:
             i_out = self.riden.send_command('get_i_out').get('result', None)
             Pow=v_out*i_out *0.001 if v_out is not None and i_out is not None else None
 
+            v_out = v_out if v_out is not None else 0.0
+            i_out = i_out if i_out is not None else 0.0
+            Pow = Pow if Pow is not None else 0.0
             print(f"Riden Output - Voltage: {v_out} V, , Current: {i_out} A, Power: {BatLoader.BRIGHT_GREEN} {Pow:.3f} {BatLoader.RESET}  kW")
-        
+
             # Set output ON or OFF
             self.riden.set_output(True)   # Turn output ON
             # riden.set_output(False)  # Turn output OFF
