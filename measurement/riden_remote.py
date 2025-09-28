@@ -13,16 +13,22 @@ class RidenRemote:
         self.ip = ip
         self.port = port
 
-    def send_command(self, cmd, args=None, kwargs=None):
+    def send_command(self, cmd, args=None, kwargs=None, timeout=3.0):
         command = {"cmd": cmd}
         if args:
             command["args"] = args
         if kwargs:
             command["kwargs"] = kwargs
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect((self.ip, self.port))
-            s.sendall(json.dumps(command).encode())
-            data = s.recv(4096)
+            s.settimeout(timeout)
+            try:
+                s.connect((self.ip, self.port))
+                s.sendall(json.dumps(command).encode())
+                data = s.recv(4096)
+            except socket.timeout:
+                return {"error": "Socket timeout", "cmd": cmd}
+            except Exception as e:
+                return {"error": f"Socket error: {e}", "cmd": cmd}
         try:
             return json.loads(data.decode())
         except Exception as e:
@@ -35,7 +41,22 @@ class RidenRemote:
     def set_v_set(self, v):
         resp = self.send_command("set_v_set", args=[v])
         return resp.get("result", resp)
+    
+    def set_i_set(self, i):
+        resp = self.send_command("set_i_set", args=[i])
+        return resp.get("result", resp)
 
+    def get_i_set(self):
+        resp = self.send_command("get_i_set")
+        return resp.get("result", resp)
+    
+    def get_i_out(self):
+        resp = self.send_command("get_i_out")
+        return resp.get("result", resp)
+
+    def get_v_out(self):
+        resp = self.send_command("get_v_out")
+        return resp.get("result", resp)
     # Add more methods as needed, or use send_command for generic calls
 
 if __name__ == "__main__":
