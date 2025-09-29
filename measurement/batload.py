@@ -149,36 +149,26 @@ class BatLoader:
         
         
     def riden_drv(self):
-        print("[riden_drv] Step 1: Calculate required current (PID)")
         required_current = self.required_current_pid()
         required_current_min = max(0, required_current)
         required_current = min(self.max_current, required_current_min)  # Limit to max current
-        print(f"[riden_drv] Step 2: Set voltage {self.battery_voltage} and current {required_current}")
         try:
-            print("[riden_drv] Step 2a: Setting voltage...")
             self.riden.set_v_set(self.battery_voltage)
-            print("[riden_drv] Step 2b: Setting current...")
             self.riden.send_command('set_i_set', args=[required_current])
 
-            print("[riden_drv] Step 3: Reading output voltage...")
             v_out = self.riden.send_command('get_v_out').get('result', None)
-            print(f"[riden_drv] Step 3: v_out={v_out}")
-            print("[riden_drv] Step 4: Reading output current...")
             i_out = self.riden.send_command('get_i_out').get('result', None)
-            print(f"[riden_drv] Step 4: i_out={i_out}")
             Pow = v_out * i_out * 0.001 if v_out is not None and i_out is not None else None
 
-            print("[riden_drv] Step 5: Check device response and print output")
             try:
                 if v_out is None or i_out is None:
                     raise ValueError("No response from Riden device")
                 print(f"Riden Output - Voltage: {v_out} V, , Current: {i_out} A, Power: {BatLoader.BRIGHT_GREEN} {Pow:.3f} {BatLoader.RESET}  kW")
             except Exception as e:
-                print(f"Riden device not responding: {e}")
+                print(f"Riden device not responding:{BatLoader.BRIGHT_PINK} {e}{BatLoader.RESET}")
                 time.sleep(2)
                 return  # Skip rest of this loop iteration
 
-            print("[riden_drv] Step 6: Set output ON")
             self.riden.set_output(True)   # Turn output ON
             # self.riden.set_output(False)  # Turn output OFF
         except OSError as e:

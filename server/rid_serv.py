@@ -1,4 +1,3 @@
-
 import socket
 import threading
 import json
@@ -6,35 +5,38 @@ import traceback
 import os
 import signal
 import subprocess
-from riden.riden import Riden
+import sys
 import time
+from riden.riden import Riden
 
-
-# Robust Riden instance creation
+# Globals
 riden = None
-server_socket = None  # global
+server_socket = None
+shutdown_flag = False
 riden_status = {"ok": False, "last_error": None, "ttl": 0}
-try:
-    riden = Riden()
-    riden_status["ok"] = True
-except Exception as e:
-    riden_status["ok"] = False
-    riden_status["last_error"] = f"Init error: {e}"
+
+
+# ---------------- Riden Handling ----------------
+def init_riden():
+    global riden, riden_status
+    try:
+        riden = Riden()
+        riden_status["ok"] = True
+        riden_status["last_error"] = None
+        riden_status["ttl"] = 0
+        print("[INFO] Riden initialized")
+    except Exception as e:
+        riden = None
+        riden_status["ok"] = False
+        riden_status["last_error"] = f"Init error: {e}"
+        print(f"[ERROR] Could not initialize Riden: {e}")
+
 
 def error_service():
-    global riden
-    while True:
+    global riden, shutdown_flag
+    while not shutdown_flag:
         if riden is None:
-            try:
-                riden = Riden()
-                riden_status["ok"] = True
-                riden_status["last_error"] = None
-                riden_status["ttl"] = 0
-            except Exception as e:
-                print(f"[ERROR] Could not initialize Riden: {e}")
-                riden_status["ok"] = False
-                riden_status["last_error"] = f"Init error: {e}"
-                riden_status["ttl"] += 1
+            init_riden()
         else:
             try:
                 _ = riden.get_id()
@@ -48,6 +50,7 @@ def error_service():
                 riden_status["ttl"] += 1
                 riden = None
         time.sleep(2)
+
 
 def handle_riden_command(command: dict) -> dict:
     """Dispatch command to Riden class methods."""
@@ -67,10 +70,12 @@ def handle_riden_command(command: dict) -> dict:
     except Exception as e:
         return {"error": str(e), "trace": traceback.format_exc()}
 
+
+# ---------------- Client Handling ----------------
 def client_thread(conn, addr):
-    print(f"Connection from {addr}")
+    print(f"[INFO] Connection from {addr}")
     try:
-        while True:
+        while not shutdown_flag:
             data = conn.recv(4096)
             if not data:
                 break
@@ -82,17 +87,18 @@ def client_thread(conn, addr):
                 response = handle_riden_command(command)
             conn.sendall(json.dumps(response).encode())
     except Exception as e:
-        print(f"Error: {e}")
+        if not shutdown_flag:
+            print(f"[WARN] Client error {addr}: {e}")
     finally:
         conn.close()
-        print(f"Connection closed: {addr}")
+        print(f"[INFO] Connection closed: {addr}")
 
 
+# ---------------- Server Handling ----------------
 def get_local_ip():
     """Detect the local IP address automatically."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        # Doesn't have to be reachable
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
     except Exception:
@@ -101,8 +107,9 @@ def get_local_ip():
         s.close()
     return ip
 
+
 def start_server(host=None, port=6030):
-    global server_socket
+    global server_socket, shutdown_flag
     if host is None:
         host = get_local_ip()
     free_port(port)
@@ -110,14 +117,15 @@ def start_server(host=None, port=6030):
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((host, port))
     server_socket.listen(5)
-    print(f"Riden 6030 TCP server listening on {host}:{port}")
+    print(f"[INFO] Riden 6030 TCP server listening on {host}:{port}")
     try:
-        while True:
+        while not shutdown_flag:
             conn, addr = server_socket.accept()
             t = threading.Thread(target=client_thread, args=(conn, addr), daemon=True)
             t.start()
-    except KeyboardInterrupt:
-        print("Server shutting down.")
+    except Exception as e:
+        if not shutdown_flag:
+            print(f"[ERROR] Server error: {e}")
     finally:
         close_server()
 
@@ -127,19 +135,17 @@ def close_server():
     if server_socket:
         try:
             server_socket.close()
-            print("Server socket closed.")
+            print("[INFO] Server socket closed.")
         except Exception as e:
-            print(f"Error closing socket: {e}")
+            print(f"[WARN] Error closing socket: {e}")
         finally:
             server_socket = None
 
+
 def free_port(port: int):
-    """
-    Check if a TCP port is in use, kill the process using it, and wait until the port is free.
-    """
+    """Check if a TCP port is in use, kill the process using it, and wait until the port is free."""
     while True:
         try:
-            # Get all PIDs using this port
             result = subprocess.run(
                 ["lsof", "-ti", f"tcp:{port}"],
                 stdout=subprocess.PIPE,
@@ -148,23 +154,47 @@ def free_port(port: int):
             )
             pids = result.stdout.strip().splitlines()
         except Exception as e:
-            print(f"Error checking port {port}: {e}")
+            print(f"[WARN] Error checking port {port}: {e}")
             pids = []
 
         if not pids:
-            break  # port is free
+            break
 
         for pid in pids:
             try:
-                print(f"Killing process {pid} using port {port}")
+                print(f"[INFO] Killing process {pid} using port {port}")
                 os.kill(int(pid), signal.SIGKILL)
             except Exception as e:
-                print(f"Failed to kill process {pid}: {e}")
+                print(f"[WARN] Failed to kill process {pid}: {e}")
 
         time.sleep(0.5)
 
 
+# ---------------- Signal Handling ----------------
+def handle_sigint(sig, frame):
+    global shutdown_flag
+    print("\n[INFO] Caught Ctrl+C, shutting down...")
+    shutdown_flag = True
+    close_server()
+    if riden:
+        try:
+            riden.close()
+            print("[INFO] Riden closed.")
+        except Exception as e:
+            print(f"[WARN] Error closing Riden: {e}")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, handle_sigint)
+
+
+# ---------------- Main ----------------
 if __name__ == "__main__":
-    # Start error service thread
+    # Start the TCP server first so it is immediately responsive
+    threading.Thread(target=start_server, daemon=True).start()
+    # Then initialize Riden and start error_service
+    init_riden()
     threading.Thread(target=error_service, daemon=True).start()
-    start_server()
+    # Keep main thread alive
+    while not shutdown_flag:
+        time.sleep(1)
