@@ -64,9 +64,7 @@ class BatLoader:
         self.max_current=max_current
         self.meter = Meter()
         self.riden = RidenRemote(ip=riden_ip, port=6030)  # Set your Riden's IP and port
-         # Increase kp and kd for faster response, reduce ki to avoid windup
-        #self.pid = PIDController(kp=1.0, ki=0.5, kd=0.5, setpoint=0.0)
-        self.pid = PIDController(kp=2.0, ki=0.5, kd=1.0, setpoint=0.0)
+        self.pid = PIDController(kp=2.0, ki=0.5, kd=1.0, setpoint=-0.05)
     def log_to_csv(self, filename=LOG_FILE, **kwargs):
         """
         Log named values into a CSV file with timestamp.
@@ -124,11 +122,6 @@ class BatLoader:
         obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0']
         import_p, export_p = self.get_obis_values(df, obis_codes)
 
-        # if export_p is not None:
-        #     export_p += 0.4
-        # else:
-        #     export_p = 0.4  # or set to 0.0, or handle as needed
-         
         power_diff = export_p - import_p if import_p is not None and export_p is not None else None
         self.log_to_csv(  import_p=import_p ,export_p =export_p, power_diff=power_diff)
        
