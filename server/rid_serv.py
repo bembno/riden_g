@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from riden.riden import Riden
+from concurrent.futures import ThreadPoolExecutor
 
 # Globals
 riden = None
@@ -108,7 +109,8 @@ def get_local_ip():
     return ip
 
 
-def start_server(host=None, port=6030):
+def start_server(host=None, port=6030, max_workers=20):
+    """Start TCP server with a thread pool to prevent 'can't start new thread'."""
     global server_socket, shutdown_flag
     if host is None:
         host = get_local_ip()
@@ -118,16 +120,28 @@ def start_server(host=None, port=6030):
     server_socket.bind((host, port))
     server_socket.listen(5)
     print(f"[INFO] Riden 6030 TCP server listening on {host}:{port}")
-    try:
-        while not shutdown_flag:
-            conn, addr = server_socket.accept()
-            t = threading.Thread(target=client_thread, args=(conn, addr), daemon=True)
-            t.start()
-    except Exception as e:
-        if not shutdown_flag:
-            print(f"[ERROR] Server error: {e}")
-    finally:
-        close_server()
+
+    # Thread pool instead of unbounded threads
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        try:
+            while not shutdown_flag:
+                try:
+                    server_socket.settimeout(1.0)
+                    conn, addr = server_socket.accept()
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if not shutdown_flag:
+                        print(f"[ERROR] Accept failed: {e}")
+                    continue
+
+                conn.settimeout(10)  # auto-close idle connections
+                executor.submit(client_thread, conn, addr)
+        except Exception as e:
+            if not shutdown_flag:
+                print(f"[ERROR] Server error: {e}")
+        finally:
+            close_server()
 
 
 def close_server():
