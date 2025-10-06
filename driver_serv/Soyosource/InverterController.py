@@ -3,25 +3,35 @@ import serial
 import time
 import logging
 import platform
-import serial
-import time
-import logging
-import platform
 import glob
+import threading
 from typing import List
 
 class InverterController:
-    def __init__(self, port=None, baud=4800, timeout=0.5, max_power=950, send_interval=0.5, power_inc_interval=1.0):
+    def __init__(self, port=None, baud=4800, timeout=0.5, max_power=950, send_interval=0.5):
         self.port = port
         self.baud = baud
         self.timeout = timeout
         self.max_power = max_power
         self.send_interval = send_interval
-        self.power_inc_interval = power_inc_interval
         self.ser = None
         self.HEADER = [36, 86, 0, 33]
         self.BYTE6 = 128
+        self._power = 0  # stored in watts
+        self._running = False
+        self._thread = None
         logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+
+    def set_power(self, power_kw: float):
+        """Set output power in kW, internally converted to watts before sending."""
+        power_watts = int(power_kw * 1000)
+        self._power = max(0, min(power_watts, self.max_power))
+        logging.info(f"Set power to {power_kw:.3f} kW ({self._power} W, sent every {self.send_interval}s)")
+
+    def _send_loop(self):
+        while self._running:
+            self.send_power(self._power)
+            time.sleep(self.send_interval)
 
     def scan_serial_ports(self) -> List[str]:
         system = platform.system()
@@ -84,7 +94,7 @@ class InverterController:
         except Exception as e:
             logging.error(f"Failed to send packet: {e}")
 
-    def run(self):
+    def start(self, initial_power_kw=0.0):
         if not self.port:
             self.port = self.detect_com_port()
         try:
@@ -92,29 +102,25 @@ class InverterController:
         except Exception as e:
             logging.error(f"Setup error: {e}")
             return
+        self.set_power(initial_power_kw)
+        self._running = True
+        self._thread = threading.Thread(target=self._send_loop, daemon=True)
+        self._thread.start()
+        logging.info("Started background power sending thread.")
 
-        
-        last_send_time = time.time()
-        last_inc_time = time.time()
-
-        try:
-            while power <= self.max_power:
-                current_time = time.time()
-                if current_time - last_send_time >= self.send_interval:
-                    self.send_power(power)
-                    last_send_time = current_time
-                if current_time - last_inc_time >= self.power_inc_interval:
-                    # power += 1
-                    last_inc_time = current_time
-                time.sleep(0.01)
-            logging.info(f"Reached MAX_POWER {self.max_power} W. Stopping.")
-        except KeyboardInterrupt:
-            logging.info("Interrupted by user — stopping.")
-        finally:
-            self.disconnect()
+    def stop(self):
+        self._running = False
+        if self._thread:
+            self._thread.join()
+        self.disconnect()
+        logging.info("Stopped background power sending thread and disconnected.")
 
 if __name__ == "__main__":
     inverter = InverterController()
-    power = 140
-    inverter.run()
-    inverter.send_power(power)
+    inverter.start(initial_power_kw=0.14)  # 0.14 kW = 140 W
+    try:
+        while True:
+            time.sleep(10)
+            inverter.set_power(0.13)  # 0.9 kW = 900 W
+    except KeyboardInterrupt:
+        inverter.stop()

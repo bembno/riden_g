@@ -94,6 +94,24 @@ signal.signal(signal.SIGINT, handle_sigint)
 
 # ---------------- Main ----------------
 if __name__ == "__main__":
+    # Import InverterController and set up MQTT-driven power control
+    from Soyosource.InverterController import InverterController
+    inverter = InverterController()
+    inverter.start(initial_power_kw=0.0)
+
+    # Set up MQTT server to receive set_power commands
+    def set_power_callback(power_kw):
+        inverter.set_power(power_kw)
+
+    mqtt_server = MQTTServer(
+        broker='localhost',
+        port=1883,
+        status_topic='riden/status',
+        set_power_topic='riden/set_power',
+        set_power_callback=set_power_callback
+    )
+    mqtt_server.start()
+
     # Start the TCP server first so it is immediately responsive
     threading.Thread(target=lambda: start_server(handle_riden_command, lambda: shutdown_flag), daemon=True).start()
     # Then initialize Riden and start error_service

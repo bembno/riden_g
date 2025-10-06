@@ -6,6 +6,9 @@ import signal
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
+import paho.mqtt.client as mqtt
 
 # ---------------- Server Handling ----------------
 def client_thread(conn, addr, shutdown_flag, handle_riden_command):
@@ -102,24 +105,38 @@ def free_port(port: int):
                 print(f"[WARN] Failed to kill process {pid}: {e}")
 
         time.sleep(0.5)
-import threading
-import time
-import paho.mqtt.client as mqtt
+
 
 class MQTTServer:
-    def __init__(self, broker='localhost', port=1883, topic='riden/status'):
+    def __init__(self, broker='127.0.0.1', port=1883, status_topic='riden/status', set_power_topic='riden/set_power', set_power_callback=None):
         self.broker = broker
         self.port = port
-        self.topic = topic
+        self.status_topic = status_topic
+        self.set_power_topic = set_power_topic
+        self.set_power_callback = set_power_callback
         self.client = mqtt.Client()
         self.running = False
 
     def on_connect(self, client, userdata, flags, rc):
         print(f"[MQTT] Connected with result code {rc}")
-        client.subscribe(self.topic)
+        client.subscribe(self.status_topic)
+        client.subscribe(self.set_power_topic)
 
     def on_message(self, client, userdata, msg):
         print(f"[MQTT] Message received: {msg.topic} {msg.payload}")
+        if msg.topic == self.set_power_topic and self.set_power_callback:
+            try:
+                # Accept both plain float (kW) and JSON {"power": ...}
+                payload = msg.payload.decode()
+                try:
+                    value = float(payload)
+                except ValueError:
+                    import json
+                    value = float(json.loads(payload)["power"])
+                self.set_power_callback(value)
+                print(f"[MQTT] Set power callback called with value: {value} kW")
+            except Exception as e:
+                print(f"[MQTT] Error handling set_power message: {e}")
 
     def start(self):
         self.client.on_connect = self.on_connect
@@ -133,4 +150,4 @@ class MQTTServer:
         self.client.disconnect()
 
     def publish_status(self, status):
-        self.client.publish(self.topic, status)
+        self.client.publish(self.status_topic, status)
