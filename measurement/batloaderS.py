@@ -23,7 +23,7 @@ class PIDController:
         self.last_error = 0.0
         self.last_time = None
 
-    def update(self, measured_value, max_output=None):
+    def update(self, measured_value, min_output=-0.9, max_output=1.8):
         error = measured_value - self.setpoint
         now = time.time()
         dt = 1.0
@@ -38,9 +38,9 @@ class PIDController:
                 # Remove the last integration step
                 self.integral -= error * dt
                 output = max_output
-            elif output < 0:
+            elif output < min_output:
                 self.integral -= error * dt
-                output = 0.0
+                output = min_output
         self.last_error = error
         self.last_time = now
         return output
@@ -72,7 +72,7 @@ class BatLoaderS:
         self.max_current = max_current
         self.meter = Meter()
         self.riden = RidenRemote(ip=riden_ip, port=6030)
-        self.pid = PIDController(kp=2.0, ki=0.5, kd=1.0, setpoint=-0.05)
+        self.pid = PIDController(kp=.1, ki=0.05, kd=0.1, setpoint=-0.05)
         # If use_power True, send desired power (watts) to riden server via set_power command
         self.use_power = use_power
         self.inverter_port = inverter_port
@@ -118,7 +118,7 @@ class BatLoaderS:
                 values.append(None)
         return values
 
-    def required_current_pid(self):
+    def required_power_pid(self):
         df = self.get_all_riden_to_df()
         obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0']
         import_p, export_p = self.get_obis_values(df, obis_codes)
@@ -127,14 +127,14 @@ class BatLoaderS:
         self.log_to_csv(import_p=import_p, export_p=export_p, power_diff=power_diff)
         if power_diff is not None:
             pid_output = self.pid.update(power_diff, max_output=self.max_current)
-            safe_current = max(0.0, min(self.max_current, pid_output))
+            #safe_current = max(0.0, min(self.max_current, pid_output))
             print(
                 f"received (-P):{BatLoaderS.BLUE}{import_p:.2f}{BatLoaderS.RESET}[kW], "
                 f"delivered (+P): {BatLoaderS.GREEN}{export_p:.2f}{BatLoaderS.RESET}[kW], "
                 f"power_diff:{BatLoaderS.MAGENTA} {power_diff:.2f} {BatLoaderS.RESET}[kW], "
-                f"cal current: {BatLoaderS.YELLOW}{safe_current:.2f}{BatLoaderS.RESET} [A] "
+                f"pid_output: {BatLoaderS.YELLOW}{pid_output:.2f}{BatLoaderS.RESET} [A] "
             )
-            return safe_current
+            return pid_output
         else:
             print("Could not calculate required current due to missing OBIS values.")
             return 0.0
@@ -155,23 +155,31 @@ class BatLoaderS:
             return {"error": f"send_set_power failed: {e}"}
 
     def riden_drv(self):
-        required_current = self.required_current_pid()
-        required_current_min = max(0, required_current)
-        required_current = min(self.max_current, required_current_min)
+        PID_power = self.required_power_pid()
+        #required_current_min = max(0, required_current)
+        #required_current = min(self.max_current, required_current_min)
         try:
             # keep setting v_set as before
             self.riden.set_v_set(self.battery_voltage)
-            desired_power_w=2
-            resp = self.send_set_power(desired_power_w, via_inverter=True)
-            print(f"Set power -> {desired_power_w} W, server resp: {resp}")
-            
-            # set current (amps) as before
-            self.riden.send_command('set_i_set', args=[required_current])
 
+
+            
             v_out = self.riden.send_command('get_v_out').get('result', None)
+            required_current=PID_power*1000/self.battery_voltage
+            #print(f"Calculated current from PID power: {required_current} A")
+            # set current (amps) as before
+            if required_current>0:
+                self.riden.send_command('set_i_set', args=[required_current])
+            else:
+                desired_power_w=PID_power*-1000
+                resp = self.send_set_power(desired_power_w, via_inverter=True)
+                print(f"server resp: {resp}")
+
+
             i_out = self.riden.send_command('get_i_out').get('result', None)
             Pow = v_out * i_out * 0.001 if v_out is not None and i_out is not None else None
-
+            
+         
             try:
                 if v_out is None or i_out is None:
                     raise ValueError("No response from Riden device")
@@ -201,7 +209,7 @@ def main():
         while True:
             print(f"\n--- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
             bat_loader.riden_drv()
-            time.sleep(1)
+            time.sleep(0.5)
     except KeyboardInterrupt:
         print("Interrupted by user - exiting")
 
