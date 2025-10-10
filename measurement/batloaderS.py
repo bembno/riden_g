@@ -72,7 +72,7 @@ class BatLoaderS:
         self.max_current = max_current
         self.meter = Meter()
         self.riden = RidenRemote(ip=riden_ip, port=6030)
-        self.pid = PIDController(kp=.1, ki=0.05, kd=0.1, setpoint=-0.05)
+        self.pid = PIDController(kp=.3, ki=0.05, kd=0.1, setpoint=-0.05)
         # If use_power True, send desired power (watts) to riden server via set_power command
         self.use_power = use_power
         self.inverter_port = inverter_port
@@ -171,6 +171,7 @@ class BatLoaderS:
             if required_current>0:
                 self.riden.send_command('set_i_set', args=[required_current])
             else:
+                self.riden.send_command('set_i_set', args=[0.0])
                 desired_power_w=PID_power*-1000
                 resp = self.send_set_power(desired_power_w, via_inverter=True)
                 print(f"server resp: {resp}")
