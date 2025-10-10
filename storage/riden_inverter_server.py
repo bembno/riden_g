@@ -52,13 +52,13 @@ def handle_command(payload: dict):
                     response = {
                         "status": "ok",
                         "device": "inverter",
-                        "current_power": inverter.GetCurrentPower(),
+                        "result": inverter.GetCurrentPower(),
                     }
                 elif action == "get_power":
                     response = {
                         "status": "ok",
                         "device": "inverter",
-                        "current_power": inverter.GetCurrentPower(),
+                        "result": inverter.GetCurrentPower(),
                     }
                 else:
                     response = {
