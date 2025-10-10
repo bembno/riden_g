@@ -4,8 +4,8 @@ from riden.riden import Riden
 r = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)
 
 # Getters and Setters are available
-r.set_v_set(57.20)
-r.set_i_set(0.69)
+r.set_v_set(55.0)
+r.set_i_set(0.59)
 print(r.get_v_set())
 print(r.get_i_set())
 

@@ -1,30 +1,45 @@
-from drivers.riden import Riden
-from drivers.InverterController import InverterController
-import serial, time
+# mqtt_server_waiting.py
+import paho.mqtt.client as mqtt
+import json
+import threading
 
-# These are the default values for port, baudrate, and address
-charger = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)
+# ---- MQTT Settings ----
+BROKER = "localhost"   # or IP of your Pi
+PORT = 1883
+TOPIC_CMD = "inverter/command"
 
+# ---- MQTT Callbacks ----
+def on_connect(client, userdata, flags, rc):
+    print("Connected to MQTT broker")
+    client.subscribe(TOPIC_CMD)
+    print(f"Subscribed to {TOPIC_CMD}")
 
-inverter = InverterController()
-inverter.Connect()
-inverter.ThreadLooping(start_power=0)
-time.sleep(5)
-inverter.ModifyPower(120)
-time.sleep(10)
-# Getters and Setters are available
-charger.set_v_set(57)
-charger.set_i_set(0.69)
+def on_message(client, userdata, msg):
+    try:
+        payload = json.loads(msg.payload)
+        device = payload.get("device")
+        action = payload.get("action")
+        value = payload.get("value", None)
+        print(f"Received command -> Device: {device}, Action: {action}, Value: {value}")
+        # Here you just receive the command, **no driver action is executed**
+    except Exception as e:
+        print("Error processing message:", e)
 
-charger.set_output(True)
+# ---- Setup MQTT Client ----
+client = mqtt.Client()
+client.on_connect = on_connect
+client.on_message = on_message
 
-print(charger.get_v_set())
-print(charger.get_i_set())
-print(charger.get_v_out())
-print(charger.get_i_out())
-# Mass polling is available as well
-# This reduces the number of reads to the device
-charger.update()
-print(charger.v_set)
-print(charger.i_set)
-print(charger.i_out)
+client.connect(BROKER, PORT, 60)
+
+# ---- Start MQTT loop in background ----
+threading.Thread(target=client.loop_forever, daemon=True).start()
+
+print("MQTT server running and waiting for commands... Press Ctrl+C to exit.")
+
+# Keep main thread alive
+try:
+    while True:
+        pass
+except KeyboardInterrupt:
+    print("Exiting MQTT server.")
