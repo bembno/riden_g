@@ -80,7 +80,7 @@ def handle_command(payload: dict):
         }
 
     # Always log for debugging
-    print("↩️ Response:", response)
+    print("Response:", response)
     return response
 
 

@@ -31,10 +31,19 @@ client.publish(TOPIC_CMD, json.dumps(cmd))
 # Get Riden voltage
 cmd = {"device": "riden", "action": "get_v_set"}
 client.publish(TOPIC_CMD, json.dumps(cmd))
-
-cmd = {"device": "riden", "action": "set_output", "value": True}
+cmd = {"device": "riden", "action": "get_v_out"}
 client.publish(TOPIC_CMD, json.dumps(cmd))
+cmd = {"device": "riden", "action": "get_i_out"}
+client.publish(TOPIC_CMD, json.dumps(cmd))
+cmd = {"device": "riden", "action": "get_p_out"}
 
+
+client.publish(TOPIC_CMD, json.dumps(cmd))
+cmd = {"device": "riden", "action": "is_output"}
+
+client.publish(TOPIC_CMD, json.dumps(cmd))
+cmd = {"device": "riden", "action": "set_output", "value": False}
+client.publish(TOPIC_CMD, json.dumps(cmd))
 
 # Set inverter power
 cmd = {"device": "inverter", "action": "set_power", "value": 110}
