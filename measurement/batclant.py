@@ -23,22 +23,12 @@ class Batclant:
     def _on_message(self, client, userdata, msg):
         try:
             self.last_response = json.loads(msg.payload.decode())
-            #print("📩 Server response:", self.last_response)
         except Exception as e:
             self.last_response = {"status": "error", "message": f"Invalid JSON: {e}"}
 
     # Generic send command
     def send(self, device: str, function: str, value=None, timeout=2.0):
-        """
-        Send any command to a device.
-        Args:
-            device (str): 'riden' or 'inverter'
-            function (str): Action/method name, e.g. 'set_v_set', 'get_v_out'
-            value: Optional value to send
-            timeout: Wait for response
-        Returns:
-            dict: Response from server
-        """
+
         self.last_response = None
         cmd = {"device": device, "action": function}
         if value is not None:
@@ -72,8 +62,8 @@ if __name__ == "__main__":
     bat = Batclant()
 
     # Set and get Riden values
-    bat.send("riden", "set_v_set", 57.0)
-    bat.send("riden", "set_i_set", 1.2)
+    bat.send("riden", "set_v_set", 56.0)
+    bat.send("riden", "set_i_set", 1.0)
     bat.send("riden", "set_output", True)
     print("V_SET:", bat.get("riden", "get_v_set")["result"])
     print("V_OUT:", bat.get("riden", "get_v_out")["result"])
