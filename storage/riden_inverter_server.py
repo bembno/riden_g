@@ -11,10 +11,17 @@ TOPIC_CMD = "devices/command"
 TOPIC_RESP = "devices/response"
 
 # Initialize devices
-charger = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)
-inverter = InverterController()
-inverter.Connect()
-inverter.ThreadLooping(start_power=0)
+connected = False
+while True:
+    try:
+        charger = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)
+        inverter = InverterController()
+        inverter.Connect()
+        inverter.ThreadLooping(start_power=0)
+        connected = True  # success — exit retry loop
+    except Exception as e:
+        print("Error initializing devices:", e)
+
 
 # Thread lock for safety
 lock = threading.Lock()

@@ -58,7 +58,7 @@ class Riden:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
-        self.serial =  serial(port=self.port, baudrate=self.baudrate, timeout=self.timeout)
+        self.serial =  serial#(port=self.port, baudrate=self.baudrate, timeout=self.timeout)
         self.master = master
         self.close_after_call = close_after_call
         
