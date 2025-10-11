@@ -1,0 +1,141 @@
+from P1uitlezen import Meter
+from batclant import Batclant
+import time
+
+
+
+
+class PIDController:
+    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.setpoint = setpoint
+        self.integral = 0.0
+        self.last_error = 0.0
+        self.last_time = None
+
+    def adjustPower(self, measured_value, min_output=-1.8, max_output=0.9):
+        error = measured_value - self.setpoint
+        now = time.time()
+        dt = 1.0
+        if self.last_time is not None:
+            dt = now - self.last_time
+        self.integral += error * dt
+        derivative = (error - self.last_error) / dt if dt > 0 else 0.0
+        output = self.kp * error + self.ki * self.integral + self.kd * derivative
+        # Anti-windup: clamp integral if output would exceed max_output
+        if max_output is not None and self.ki != 0.0:
+            if output > max_output:
+                # Remove the last integration step
+                self.integral -= error * dt
+                output = max_output
+            elif output < min_output:
+                self.integral -= error * dt
+                output = min_output
+        self.last_error = error
+        self.last_time = now
+        return output
+
+BRIGHT_PINK = "\033[95m"
+RESET = "\033[0m"
+BLACK = "\033[30m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+MAGENTA = "\033[35m"
+CYAN = "\033[36m"
+WHITE = "\033[37m"
+BRIGHT_RED = "\033[91m"
+BRIGHT_GREEN = "\033[92m"
+BRIGHT_YELLOW = "\033[93m"
+BRIGHT_BLUE = "\033[94m"
+BRIGHT_MAGENTA = "\033[95m"
+BRIGHT_CYAN = "\033[96m"
+BRIGHT_WHITE = "\033[97m"
+
+meter = Meter()
+storage = Batclant()
+pid = PIDController(kp=.2, ki=0.05, kd=0.1, setpoint=0.00)
+
+def get_all_riden_to_df():
+    meter.connect()
+    parsed_data = meter.read_lines(count=35)
+    meter.close()
+    df = meter.to_dataframe(parsed_data)
+    return df
+
+def get_listed_obis_values( df, obis_list):
+    values = []
+    for obis in obis_list:
+        row = df[df['OBIS'] == obis]
+        if not row.empty:
+            try:
+                values.append(float(row.iloc[0]['Value']))
+            except Exception:
+                values.append(None)
+        else:
+            values.append(None)
+    return values
+
+def get_AC_instantenious(obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0','1-0:21:.7.0', '1-0:41:.7.0', '1-0:41:.7.0']):
+    df = get_all_riden_to_df()
+    #obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0','1-0:21:.7.0', '1-0:41:.7.0', '1-0:41:.7.0']
+    AC_values = get_listed_obis_values(df, obis_codes)
+    return AC_values
+
+# import_p, export_p= get_AC_instantenious()[:2]
+# print(import_p, export_p)
+def initialize_values():
+    # Set Riden values
+    storage.set_value("riden", "set_v_set", 56.0)
+    # Get Riden values
+    output_ON=storage.get_value("riden", "is_output")
+    print("Output status:",output_ON )
+    print("V_SET:", storage.get_value("riden", "get_v_set"))
+    print("V_OUT:", storage.get_value("riden", "get_v_out"))
+    print("I_OUT:", storage.get_value("riden", "get_i_out"))
+    print("P_OUT:", storage.get_value("riden", "get_p_out"))
+    # Set and get inverter power
+    storage.set_value("inverter", "set_power", 0)
+    print("Inverter power:", storage.get_value("inverter", "get_power"))
+
+def PtoI(power_kwatts, voltage=57.0):
+    if voltage <= 0:
+        raise ValueError("Voltage must be greater than zero")
+    current = abs( power_kwatts * 1000 / voltage)
+    return current
+
+
+def main_loop():
+    initialize_values()
+    while True:
+        import_p, export_p,L1,L2,L3= get_AC_instantenious()[:5]
+        power_diff = import_p-export_p  if import_p is not None and export_p is not None else 0.0
+        print(f"Import: {import_p} kW, Export: {export_p} kW Power difference: {MAGENTA} {power_diff:.3f} {RESET} kW,L1:{L1}, L2:{L2}, L3:{L3}")
+        
+        
+        pid_power = pid.adjustPower(power_diff)
+        print(f"PID output (power setpoint): {CYAN}{pid_power:.3f}{RESET} kW")
+        if pid_power>0:
+            war_power=round(pid_power*1000)
+            storage.set_value("riden", "set_i_set", 0.0)
+            storage.set_value("inverter", "set_power", war_power)
+            print(f"Setting inverter power to: {YELLOW}{war_power:.2f}{RESET} W")
+        else:
+            storage.set_value("inverter", "set_power", 0)
+
+            v_out = storage.get_value("riden", "get_v_out")
+            current=PtoI(power_diff,v_out )
+            
+            storage.set_value("riden", "set_i_set", current)
+            print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} A based on voltage {v_out:.2f} V")
+        print("-----")
+        time.sleep(0.5)
+
+
+main_loop()
+
+    # Close connection
+storage.close()

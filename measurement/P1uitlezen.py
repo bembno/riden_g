@@ -29,7 +29,7 @@ class Meter:
         except Exception as e:
             sys.exit(f"Error opening {self.port}: {e}")
 
-    def read_lines(self, count=20):
+    def read_lines(self, count=25):
         lines = []
         parsed_data = []
         for _ in range(count):
@@ -91,6 +91,19 @@ class Meter:
             '1-0:51:.7.0': 'Current in phase L2 (A)',
             '1-0:71:.7.0': 'Current in phase L3 (A)',
             '1-0:21:.7.0': 'Instantaneous active power L1 (+P) in kW',
+            '1-0:41:.7.0': 'Instantaneous active power L2 (+P) in kW',
+            '1-0:61:.7.0': 'Instantaneous active power L3 (+P) in kW',
+            '1-0:22:.7.0': 'Instantaneous reactive power L1 (Q) in kVAr',
+            '1-0:42:.7.0': 'Instantaneous reactive power L2 (Q) in kVAr',
+            '1-0:62:.7.0': 'Instantaneous reactive power L3 (Q) in kVAr',
+            '1-0:23:.7.0': 'Instantaneous apparent power L1 (S) in kVA',
+            '1-0:43:.7.0': 'Instantaneous apparent power L2 (S) in kVA',
+            '1-0:63:.7.0': 'Instantaneous apparent power L3 (S) in kVA',
+            '1-0:1:.4.0': 'Electricity delivered to client (total) in kWh',
+            '1-0:2:.4.0': 'Electricity delivered by client (total) in kWh',
+            '0-1:24:.2.1': 'Gas meter reading in m³',
+            '0-0:96:.13.0': 'Text message from utility',
+            '0-0:96:.3.10': 'Switch position of load management device',
         }
         return descriptions.get(obis_code, '')
 

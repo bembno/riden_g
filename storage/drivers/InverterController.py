@@ -85,7 +85,7 @@ class InverterController:
     # ---- Power Control ----
     def ModifyPower(self, new_power: int):
         new_power = max(0, min(new_power, self.MaxPower))
-        self.SendPower(new_power)
+        self.SendPower(round(new_power))
 
     def GetCurrentPower(self) -> int:
         """Return the latest sent power value."""
