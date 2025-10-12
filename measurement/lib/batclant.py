@@ -32,22 +32,55 @@ class Batclant:
     # ----------------------------
     # Generic send
     # ----------------------------
-    def _send_command(self, device: str, function: str, value=None, timeout=2.0):
-        """Internal method to send command and wait for response."""
-        self.last_response = None
-        cmd = {"device": device, "action": function}
-        if value is not None:
-            cmd["value"] = value
+    def _send_command(self, device: str, function: str, value=None, timeout=2.0, retries=3):
+        """Internal method to send command and wait for response with retry."""
+        for attempt in range(retries):
+            self.last_response = None
+            cmd = {"device": device, "action": function}
+            if value is not None:
+                cmd["value"] = value
 
-        self.client.publish(self.topic_cmd, json.dumps(cmd))
+            self.client.publish(self.topic_cmd, json.dumps(cmd))
 
-        # Wait for response
-        start_time = time.time()
-        while self.last_response is None:
-            if time.time() - start_time > timeout:
-                return {"status": "error", "message": "Timeout waiting for response"}
-            time.sleep(0.05)
-        return self.last_response
+            start_time = time.time()
+            while self.last_response is None:
+                if time.time() - start_time > timeout:
+                    break
+                time.sleep(0.05)
+
+            if self.last_response is not None:
+                return self.last_response
+
+            print(f"Timeout waiting for response from {device}.{function}, attempt {attempt+1}/{retries}")
+            time.sleep(2)
+            # Try reconnecting to MQTT broker before next retry
+            try:
+                self.client.reconnect()
+            except Exception:
+                print("Reconnecting MQTT client failed, will retry...")
+
+        return {"status": "error", "message": "Timeout waiting for response after retries"}
+
+
+
+
+
+    # def _send_command(self, device: str, function: str, value=None, timeout=2.0):
+    #     """Internal method to send command and wait for response."""
+    #     self.last_response = None
+    #     cmd = {"device": device, "action": function}
+    #     if value is not None:
+    #         cmd["value"] = value
+
+    #     self.client.publish(self.topic_cmd, json.dumps(cmd))
+
+    #     # Wait for response
+    #     start_time = time.time()
+    #     while self.last_response is None:
+    #         if time.time() - start_time > timeout:
+    #             return {"status": "error", "message": "Timeout waiting for response"}
+    #         time.sleep(0.05)
+    #     return self.last_response
 
     # ----------------------------
     # Public set/get functions
