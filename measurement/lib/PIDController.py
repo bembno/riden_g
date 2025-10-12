@@ -1,17 +1,18 @@
 import time
 
 class PIDController:
-    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0):
+    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0,max_change_ratio=5.0):
         self.kp = kp
         self.ki = ki
         self.kd = kd
         self.setpoint = setpoint
+        self.max_change_ratio=max_change_ratio
         self.integral = 0.0
         self.last_error = 0.0
         self.last_time = None
         self.last_output = 0.0  # for rate limiting
 
-    def adjustPower(self, measured_value, min_output=-1.8, max_output=0.9, max_change_ratio=2.0):
+    def adjustPower(self, measured_value, min_output=-1.8, max_output=0.9):
         """
         Adjust power output based on measured value.
 
@@ -43,7 +44,7 @@ class PIDController:
 
         # --- Rate limiter (±max_change_ratio * previous absolute value) ---
         if self.last_time is not None:
-            max_change = abs(self.last_output) * max_change_ratio
+            max_change = abs(self.last_output) * self.max_change_ratio
             if abs(self.last_output) < 0.05:
                 # small values → allow some minimal movement
                 max_change = 0.1

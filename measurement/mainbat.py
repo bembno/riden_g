@@ -26,7 +26,7 @@ set_v_set_initial=57.0
 
 meter = Meter()
 storage = Batclant()
-pid = PIDController(kp=.2, ki=0.05, kd=0.1, setpoint=0.00)
+pid = PIDController(kp=.3, ki=0.07, kd=0.3, setpoint=0.00, max_change_ratio=5.0)
 
 def get_all_riden_to_df():
     meter.connect()
@@ -77,12 +77,14 @@ def initialize_values():
     storage.set_value("inverter", "set_power", 0)
     print("Inverter power:", storage.get_value("inverter", "get_power"))
 
-def PtoI(power_kwatts, voltage=set_v_set_initial):
+def PtoI(power_kwatts, voltage=set_v_set_initial, max_current=30.0):
     if voltage==0:
         voltage=set_v_set_initial
         
     current = abs( power_kwatts * 1000 / voltage)
-    return current
+    safe_current = round(min(current, max_current),3)
+    return safe_current
+
 
 
 def main_loop():
@@ -92,40 +94,60 @@ def main_loop():
         try:
             import_p, export_p,L1,L2,L3= get_AC_instantenious()[:5]
             #export_p=export_p+0.1
+            if None in [import_p, export_p]:
+                print(f"{RED}Invalid P1 data, retrying...{RESET}")
+                time.sleep(0.5)
+                continue
+            #calcualte power difference
             power_diff = import_p-export_p  if import_p is not None and export_p is not None else 0.0
             print(f"Import: {import_p:.3f} kW, Export: {export_p:.3f} kW P_dif: {MAGENTA} {power_diff:.3f} {RESET} kW, L1:{L1:.3f}, L2:{L2:.3f}, L3:{L3:.3f}")
             
-            
+            #pid control
             pid_power = pid.adjustPower(power_diff)
             print(f"PID output (power setpoint): {CYAN}{pid_power:.3f}{RESET} kW")
-
+           
+            #when stable do not change power setpoints
             if -deadband <= power_diff <= deadband:
                 invert_P=storage.get_value("inverter", "get_power")/1000
                 rid_P_out=storage.get_value("riden", "get_p_out")/1000
                 print(f"Low P_dif ±{deadband:.3f} invert_P: {YELLOW}{invert_P:.3f}{RESET}, rid_P_out:{BRIGHT_GREEN} {rid_P_out:.3f}{RESET} kW ")
                 time.sleep(0.5)
                 continue
-
+            #set power to inverter
             if  pid_power >= 0:
                 war_power=round(pid_power*1000)
                 storage.set_value("riden", "set_i_set", 0.0)
                 storage.set_value("inverter", "set_power", war_power)
                 print(f"Setting inverter power to: {YELLOW}{war_power:.2f}{RESET} W")
+            #set current to riden
             elif pid_power < 0:
                 storage.set_value("inverter", "set_power", 0)
                 v_out = storage.get_value("riden", "get_v_out")
                 current=PtoI(pid_power,v_out )
                 storage.set_value("riden", "set_i_set", current)
-                print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} A based on voltage {v_out:.2f} V")
+                print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} get_V_out:  {v_out:.2f} V")
 
             print("-----")
             time.sleep(0.5)
 
         except Exception as e:
-            print(f"{RED}Error in main loop: {e}{RESET}")
-            time.sleep(1)
+            print(f"{RED} Error in main loop: {e}, activating safety mode...{RESET}")
+            try:
+                # SAFETY: reset devices
+                storage.set_value("inverter", "set_power", 0)
+                storage.set_value("riden", "set_i_set", 0.0)
+            except Exception as e2:
+                print(f"{RED}Error setting safe values: {e2}{RESET}")
 
-main_loop()
-
-    # Close connection
-storage.close()
+try:
+    main_loop()
+except KeyboardInterrupt:
+    print("Program interrupted by user, sending safe values...")
+finally:
+    # SAFETY: always reset devices
+    try:
+        storage.set_value("inverter", "set_power", 0)
+        storage.set_value("riden", "set_i_set", 0.0)
+    except Exception as e:
+        print(f"Error setting safe values: {e}")
+    storage.close()
