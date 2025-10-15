@@ -63,14 +63,6 @@ def get_all_riden_to_df():
         print(f"Error reading DSMR meter: {e}")
         return pd.DataFrame()  # fallback empty
 
-
-# def get_all_riden_to_df():
-#     meter.connect()
-#     parsed_data = meter.read_lines(count=35)
-#     meter.close()
-#     df = meter.to_dataframe(parsed_data)
-#     return df
-
 def get_listed_obis_values( df, obis_list):
     values = []
     for obis in obis_list:
