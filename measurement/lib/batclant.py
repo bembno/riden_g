@@ -63,28 +63,6 @@ class Batclant:
 
 
 
-
-
-    # def _send_command(self, device: str, function: str, value=None, timeout=2.0):
-    #     """Internal method to send command and wait for response."""
-    #     self.last_response = None
-    #     cmd = {"device": device, "action": function}
-    #     if value is not None:
-    #         cmd["value"] = value
-
-    #     self.client.publish(self.topic_cmd, json.dumps(cmd))
-
-    #     # Wait for response
-    #     start_time = time.time()
-    #     while self.last_response is None:
-    #         if time.time() - start_time > timeout:
-    #             return {"status": "error", "message": "Timeout waiting for response"}
-    #         time.sleep(0.05)
-    #     return self.last_response
-
-    # ----------------------------
-    # Public set/get functions
-    # ----------------------------
     def set_value(self, device: str, function: str, value, timeout=2.0):
         """Set a value on a device (Riden or Inverter)."""
         resp = self._send_command(device, function, value=value, timeout=timeout)

@@ -10,6 +10,6 @@ done
 sleep 2
 
 # start in screen
-screen -S a -dm bash -c 'cd ~/Desktop/prog/riden && exec python mainbat.py'
+screen -S a -dm bash -c 'cd /home/pi/Desktop/storage && exec python3 riden_inverter_server.py'
 
 echo "Server started in screen session 'a'"

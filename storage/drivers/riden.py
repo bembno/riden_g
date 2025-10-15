@@ -29,7 +29,7 @@ class Riden:
     ):
         self.id = 0
         self.address = address
-        self.serial = serial or Serial(port, baudrate)
+        self.serial = serial or Serial(port, baudrate, timeout=0.3)
         self.master = master or RtuMaster(self.serial)
 
         # Fixes "Response length is invalid 0" error
@@ -83,6 +83,11 @@ class Riden:
     def read(self, register: int, length: int = 1, retries: int = 3, delay: float = 0.2):
         for attempt in range(1, retries + 1):
             try:
+                # Flush before sending to avoid stale bytes
+                if self.serial:
+                    self.serial.reset_input_buffer()
+                    self.serial.reset_output_buffer()
+
                 response = self.master.execute(
                     self.address, READ_HOLDING_REGISTERS, register, length
                 )
@@ -94,38 +99,54 @@ class Riden:
 
         print(f"Failed to read register {register} after {retries} retries.")
         return None
+   
 
+    # def read(self, register: int, length: int = 1, retries: int = 3, delay: float = 0.2):
+    #     for attempt in range(1, retries + 1):
+    #         try:
+    #             response = self.master.execute(
+    #                 self.address, READ_HOLDING_REGISTERS, register, length
+    #             )
+    #             return response if length > 1 else response[0]
 
-    # def read(self, register: int, length: int = 1) -> int or tuple:
-    #     try:
-    #         response = self.master.execute(
-    #             self.address, READ_HOLDING_REGISTERS, register, length
-    #         )
-    #         return response if length > 1 else response[0]
-    #     except ModbusInvalidResponseError:
-    #         return self.read(register, length)
+    #         except ModbusInvalidResponseError as e:
+    #             print(f" Read failed (attempt {attempt}/{retries}): {e}")
+    #             time.sleep(delay)
+
+    #     print(f"Failed to read register {register} after {retries} retries.")
+    #     return None
 
     def write(self, register: int, value: int, retries: int = 3, delay: float = 0.2):
         for attempt in range(1, retries + 1):
             try:
+                # Flush before sending
+                if self.serial:
+                    self.serial.reset_input_buffer()
+                    self.serial.reset_output_buffer()
+
                 return self.master.execute(
                     self.address, WRITE_SINGLE_REGISTER, register, 1, value
                 )[0]
+
             except ModbusInvalidResponseError as e:
                 print(f" Write failed (attempt {attempt}/{retries}): {e}")
                 time.sleep(delay)
+
         print(f" Failed to write register {register} after {retries} retries.")
         return None
 
 
-
-    # def write(self, register: int, value: int) -> int:
-    #     try:
-    #         return self.master.execute(
-    #             self.address, WRITE_SINGLE_REGISTER, register, 1, value
-    #         )[0]
-    #     except ModbusInvalidResponseError:
-    #         return self.write(register, value)
+    # def write(self, register: int, value: int, retries: int = 3, delay: float = 0.2):
+    #     for attempt in range(1, retries + 1):
+    #         try:
+    #             return self.master.execute(
+    #                 self.address, WRITE_SINGLE_REGISTER, register, 1, value
+    #             )[0]
+    #         except ModbusInvalidResponseError as e:
+    #             print(f" Write failed (attempt {attempt}/{retries}): {e}")
+    #             time.sleep(delay)
+    #     print(f" Failed to write register {register} after {retries} retries.")
+    #     return None
 
     def write_multiple(self, register: int, values: tuple or list) -> tuple:
         try:
@@ -230,9 +251,21 @@ class Riden:
         self.i_set = _i_set / self.i_multi
         return self.i_set
 
+    # def set_i_set(self, i_set: float) -> float:
+    #     self.i_set = round(i_set * self.i_multi)
+    #     return self.write(R.I_SET, int(self.i_set))
+    
     def set_i_set(self, i_set: float) -> float:
         self.i_set = round(i_set * self.i_multi)
-        return self.write(R.I_SET, int(self.i_set))
+        print(f"[DEBUG] set_i_set({i_set}) → writing {self.i_set} raw")
+        start = time.time()
+
+        result = self.write(R.I_SET, int(self.i_set))
+
+        duration = time.time() - start
+        print(f"[DEBUG] set_i_set done in {duration:.3f}s, result={result}")
+        return result
+
 
     def get_v_out(self, _v_out: int = None) -> float:
         _v_out = _v_out or self.read(R.V_OUT)

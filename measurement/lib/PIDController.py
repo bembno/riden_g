@@ -24,12 +24,13 @@ class PIDController:
         """
         error = measured_value - self.setpoint
         now = time.time()
-        dt = 1.0
-        if self.last_time is not None:
-            dt = now - self.last_time
 
+        dt = (now - self.last_time) if self.last_time else 1.0
         # --- PID core ---
-        self.integral += error * dt
+        # --- Conditional integration (anti-windup) ---
+        if min_output < self.last_output < max_output:
+            self.integral += error * dt
+
         derivative = (error - self.last_error) / dt if dt > 0 else 0.0
         output = self.kp * error + self.ki * self.integral + self.kd * derivative
 
