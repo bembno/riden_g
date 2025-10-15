@@ -5,54 +5,125 @@ import sys
 import serial
 import pandas as pd
 import re
+import time   # <--- Add this
+from queue import Queue, Empty
 
 class Meter:
-    def __init__(self, port="/dev/ttyUSB0", baudrate=115200, timeout=20):
+    # def __init__(self, port="/dev/ttyUSB0", baudrate=115200, timeout=20):
+    #     self.port = port
+    #     self.baudrate = baudrate
+    #     self.timeout = timeout
+    #     self.ser = None
+    def __init__(self, port="/dev/ttyUSB0", baudrate=115200, timeout=2):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
         self.ser = None
+        self.last_good_data = []
+        self.telegram_end = b'!'  # DSMR telegram ends with '!'
 
     def connect(self):
-        self.ser = serial.Serial()
-        self.ser.baudrate = self.baudrate
-        self.ser.bytesize = serial.EIGHTBITS
-        self.ser.parity = serial.PARITY_NONE
-        self.ser.stopbits = serial.STOPBITS_ONE
-        self.ser.xonxoff = 0
-        self.ser.rtscts = 0
-        self.ser.timeout = self.timeout
-        self.ser.port = self.port
+        if self.ser and self.ser.is_open:
+            return
         try:
-            self.ser.open()
-            #print(f"Connected to {self.port}")
+            self.ser = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=self.timeout,
+                xonxoff=0,
+                rtscts=0
+            )
+            print(f"Connected to DSMR P1 meter on {self.port}")
         except Exception as e:
             sys.exit(f"Error opening {self.port}: {e}")
+    # def connect(self):
+    #     self.ser = serial.Serial()
+    #     self.ser.baudrate = self.baudrate
+    #     self.ser.bytesize = serial.EIGHTBITS
+    #     self.ser.parity = serial.PARITY_NONE
+    #     self.ser.stopbits = serial.STOPBITS_ONE
+    #     self.ser.xonxoff = 0
+    #     self.ser.rtscts = 0
+    #     self.ser.timeout = self.timeout
+    #     self.ser.port = self.port
+    #     try:
+    #         self.ser.open()
+    #         #print(f"Connected to {self.port}")
+    #     except Exception as e:
+    #         print(f"Warning: could not open {self.port}: {e}")
+    #         time.sleep(2)
+    #         return False
 
-    def read_lines(self, count=25):
+    def read_telegram(self):
+        """Read until end of telegram (!) or timeout"""
+        if not self.ser or not self.ser.is_open:
+            self.connect()
         lines = []
-        parsed_data = []
-        for _ in range(count):
+        start_time = time.time()
+        while True:
             try:
                 raw = self.ser.readline()
+                if not raw:
+                    if time.time() - start_time > self.timeout:
+                        break
+                    continue
+                lines.append(raw)
+                if self.telegram_end in raw:
+                    break
             except Exception as e:
-                self.close()
-                sys.exit(f"Serial port {self.port} could not be read: {e}")
-            line = self.parse_line(raw)
-            if line:
-                #print(line)
-                parsed_data.append(line)
-            lines.append(raw)
-        return parsed_data
+                print(f"Serial read error: {e}")
+                break
+
+        parsed_data = [line for line in (self.parse_line(r) for r in lines) if line]
+        if parsed_data:
+            self.last_good_data = parsed_data
+        return parsed_data or self.last_good_data  # fallback if read fails
+    
+
+    # def read_lines(self, count=25):
+    #     lines = []
+    #     parsed_data = []
+    #     for _ in range(count):
+    #         try:
+    #             raw = self.ser.readline()
+    #         except Exception as e:
+    #             self.close()
+    #             sys.exit(f"Serial port {self.port} could not be read: {e}")
+    #         line = self.parse_line(raw)
+    #         if line:
+    #             #print(line)
+    #             parsed_data.append(line)
+    #         lines.append(raw)
+    #     return parsed_data
+
+    # def parse_line(self, raw):
+    #     # Decode bytes to string and strip whitespace
+    #     try:
+    #         line = raw.decode('utf-8').strip()
+    #     except Exception:
+    #         line = str(raw).strip()
+    #     # Regex to match OBIS code lines: code(value*unit)
+    #     match = re.match(r'(?P<obis>[0-9\-:]+):?(?P<subcode>[0-9\.]*)\((?P<value>[^\)*]+)(?:\*(?P<unit>[^\)]+))?\)', line)
+    #     if match:
+    #         obis = match.group('obis')
+    #         subcode = match.group('subcode')
+    #         value = match.group('value')
+    #         unit = match.group('unit')
+    #         key = obis if not subcode else f"{obis}:{subcode}"
+    #         return {'OBIS': key, 'Value': value, 'Unit': unit}
+    #     return None
 
     def parse_line(self, raw):
-        # Decode bytes to string and strip whitespace
         try:
             line = raw.decode('utf-8').strip()
         except Exception:
             line = str(raw).strip()
-        # Regex to match OBIS code lines: code(value*unit)
-        match = re.match(r'(?P<obis>[0-9\-:]+):?(?P<subcode>[0-9\.]*)\((?P<value>[^\)*]+)(?:\*(?P<unit>[^\)]+))?\)', line)
+        match = re.match(
+            r'(?P<obis>[0-9\-:]+):?(?P<subcode>[0-9\.]*)\((?P<value>[^\)*]+)(?:\*(?P<unit>[^\)]+))?\)', line
+        )
         if match:
             obis = match.group('obis')
             subcode = match.group('subcode')
@@ -106,28 +177,40 @@ class Meter:
             '0-0:96:.3.10': 'Switch position of load management device',
         }
         return descriptions.get(obis_code, '')
-
+    
     def to_dataframe(self, parsed_data):
         df = pd.DataFrame(parsed_data)
         if not df.empty:
-            df['Description'] = df['OBIS'].apply(lambda obis: self.obis_description(obis))
+            df['Description'] = df['OBIS'].apply(self.obis_description)
         return df
+    # def to_dataframe(self, parsed_data):
+    #     df = pd.DataFrame(parsed_data)
+    #     if not df.empty:
+    #         df['Description'] = df['OBIS'].apply(lambda obis: self.obis_description(obis))
+    #     return df
 
 
+    # def close(self):
+    #     if self.ser:
+    #         try:
+    #             self.ser.close()
+    #             #print(f"Serial port {self.port} closed.")
+    #         except Exception as e:
+    #             sys.exit(f"Oops {self.port}. Program aborted. Could not close the serial port: {e}")
     def close(self):
-        if self.ser:
+        if self.ser and self.ser.is_open:
             try:
                 self.ser.close()
-                #print(f"Serial port {self.port} closed.")
+                print(f"Serial port {self.port} closed.")
             except Exception as e:
-                sys.exit(f"Oops {self.port}. Program aborted. Could not close the serial port: {e}")
-
+                print(f"Could not close {self.port}: {e}")
 
 def main():
     print("DSMR P1 reading", version)
     print("Control-C to stop")
     print("If needed, adjust the value of ser.port in the python script")
     meter = Meter()
+    
     meter.connect()
     parsed_data = meter.read_lines(20)
     meter.close()

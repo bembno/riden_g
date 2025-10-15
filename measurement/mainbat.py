@@ -4,6 +4,7 @@ import time
 from lib.PIDController import PIDController
 import os
 import csv
+import pandas as pd
 
 BRIGHT_PINK = "\033[95m"
 RESET = "\033[0m"
@@ -52,13 +53,23 @@ if not os.path.exists(file_name):
             "L2_kW",
             "L3_kW"
         ])
-
 def get_all_riden_to_df():
-    meter.connect()
-    parsed_data = meter.read_lines(count=35)
-    meter.close()
-    df = meter.to_dataframe(parsed_data)
-    return df
+    try:
+        meter.connect()  # connect once
+        parsed_data = meter.read_telegram()  # read full telegram
+        df = meter.to_dataframe(parsed_data)
+        return df
+    except Exception as e:
+        print(f"Error reading DSMR meter: {e}")
+        return pd.DataFrame()  # fallback empty
+
+
+# def get_all_riden_to_df():
+#     meter.connect()
+#     parsed_data = meter.read_lines(count=35)
+#     meter.close()
+#     df = meter.to_dataframe(parsed_data)
+#     return df
 
 def get_listed_obis_values( df, obis_list):
     values = []
