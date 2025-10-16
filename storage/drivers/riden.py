@@ -26,37 +26,6 @@ class Riden:
 
         self._open_serial()   # 🔹 Use helper instead of direct init
         self.init_device()
-    # def __init__(
-    #     self,
-    #     port: str = "/dev/ttyUSB0",
-    #     baudrate: int = 115200,
-    #     address: int = 1,
-    #     serial: Serial = None,
-    #     master: RtuMaster = None,
-    #     close_after_call: bool = False,
-    #     timeout: float = 0.5,
-    # ):
-    #     self.id = 0
-    #     self.address = address
-    #     self.serial = serial or Serial(port, baudrate, timeout=0.3)
-    #     self.master = master or RtuMaster(self.serial)
-
-    #     # Fixes "Response length is invalid 0" error
-    #     # If you experience this error, try changing your baudrate
-    #     self.master.set_timeout(timeout)
-
-    #     # Windows requires opening/closing the com port after each call
-    #     # This is a workaround that will drasticly reduce performance
-    #     if close_after_call:
-    #         hooks.install_hook(
-    #             "modbus_rtu.RtuMaster.before_send", lambda self: self._do_open()
-    #         )
-    #         hooks.install_hook(
-    #             "modbus_rtu.RtuMaster.after_recv", lambda self: self._do_close()
-    #         )
-
-    #     self.init()
-
         self.v_multi = 100
         self.i_multi = 100
         self.p_multi = 100
@@ -123,7 +92,7 @@ class Riden:
         for attempt in range(1, retries + 1):
             try:
                 if not self.is_connected():
-                    print("🔁 Riden serial not open, reconnecting...")
+                    print(" Riden serial not open, reconnecting...")
                     self.reconnect()
 
                 if self.serial:
@@ -141,26 +110,7 @@ class Riden:
 
         print(f" Failed to read register {register} after {retries} retries.")
         return None           
-    # def read(self, register: int, length: int = 1, retries: int = 3, delay: float = 0.2):
-    #     for attempt in range(1, retries + 1):
-    #         try:
-    #             # Flush before sending to avoid stale bytes
-    #             if self.serial:
-    #                 self.serial.reset_input_buffer()
-    #                 self.serial.reset_output_buffer()
 
-    #             response = self.master.execute(
-    #                 self.address, READ_HOLDING_REGISTERS, register, length
-    #             )
-    #             return response if length > 1 else response[0]
-
-    #         except ModbusInvalidResponseError as e:
-    #             print(f" Read failed (attempt {attempt}/{retries}): {e}")
-    #             time.sleep(delay)
-
-    #     print(f"Failed to read register {register} after {retries} retries.")
-    #     return None
-   
     def write(self, register, value, retries=3, delay=0.2):
         for attempt in range(1, retries + 1):
             try:
@@ -175,7 +125,7 @@ class Riden:
                 result = self.master.execute(self.address, 6, register, 1, value)
                 return result[0]
             except (SerialException, OSError, ModbusInvalidResponseError) as e:
-                print(f"⚠️ Write failed ({attempt}/{retries}): {e}")
+                print(f" Write failed ({attempt}/{retries}): {e}")
                 if isinstance(e, (SerialException, OSError)):
                     self.reconnect()
                 time.sleep(delay)
@@ -183,38 +133,6 @@ class Riden:
         print(f"Failed to write register {register} after {retries} retries.")
         return None
 
-
-    # def write(self, register: int, value: int, retries: int = 3, delay: float = 0.2):
-    #     for attempt in range(1, retries + 1):
-    #         try:
-    #             # Flush before sending
-    #             if self.serial:
-    #                 self.serial.reset_input_buffer()
-    #                 self.serial.reset_output_buffer()
-
-    #             return self.master.execute(
-    #                 self.address, WRITE_SINGLE_REGISTER, register, 1, value
-    #             )[0]
-
-    #         except ModbusInvalidResponseError as e:
-    #             print(f" Write failed (attempt {attempt}/{retries}): {e}")
-    #             time.sleep(delay)
-
-    #     print(f" Failed to write register {register} after {retries} retries.")
-    #     return None
-
-
-    # def write(self, register: int, value: int, retries: int = 3, delay: float = 0.2):
-    #     for attempt in range(1, retries + 1):
-    #         try:
-    #             return self.master.execute(
-    #                 self.address, WRITE_SINGLE_REGISTER, register, 1, value
-    #             )[0]
-    #         except ModbusInvalidResponseError as e:
-    #             print(f" Write failed (attempt {attempt}/{retries}): {e}")
-    #             time.sleep(delay)
-    #     print(f" Failed to write register {register} after {retries} retries.")
-    #     return None
 
     def write_multiple(self, register: int, values: tuple or list) -> tuple:
         try:
@@ -245,13 +163,6 @@ class Riden:
             print(f"Riden init successful, ID={self.id}")
         except Exception as e:
             print(f"⚠️ Riden init_device() failed: {e}")           
-
-
-    # def init(self) -> None:
-    #     data = self.read(R.ID, R.FW + 1)
-    #     self.get_id(data[R.ID]),
-    #     self.get_sn(data[R.SN_H], data[R.SN_L]),
-    #     self.get_fw(data[R.FW]),
 
     def get_id(self, _id: int = None) -> int:
         self.id = _id or self.read(R.ID)
@@ -325,9 +236,6 @@ class Riden:
         self.i_set = _i_set / self.i_multi
         return self.i_set
 
-    # def set_i_set(self, i_set: float) -> float:
-    #     self.i_set = round(i_set * self.i_multi)
-    #     return self.write(R.I_SET, int(self.i_set))
     
     def set_i_set(self, i_set: float) -> float:
         self.i_set = round(i_set * self.i_multi)

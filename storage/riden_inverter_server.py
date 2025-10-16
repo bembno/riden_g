@@ -27,7 +27,7 @@ def connect_charger():
             print(f"Connected to charger ID {charger.id}")
             return
         except Exception as e:
-            print("⚠️ Charger connection failed, retrying in 5s:", e)
+            print(" Charger connection failed, retrying in 5s:", e)
             time.sleep(5)
 
 
