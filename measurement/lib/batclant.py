@@ -12,17 +12,31 @@ class Batclant:
         self.topic_resp = topic_resp
         self.client = mqtt.Client()
         self.last_response = None
-
-        # MQTT callbacks
+        self.connected = False 
         self.client.on_message = self._on_message
-        self.client.connect(self.broker, self.port, 60)
-        self.client.subscribe(self.topic_resp)
-        self.client.loop_start()
-        time.sleep(0.5)  # wait for subscription
+        self.client.on_connect = self._on_connect
 
-    # ----------------------------
-    # Internal callback
-    # ----------------------------
+        self.client.loop_start()
+        self._connect()
+
+    def _connect(self):
+        while True:
+            try:
+                self.client.connect(self.broker, self.port, 60)
+                break
+            except Exception:
+                print("MQTT connect failed, retrying in 2s...")
+                time.sleep(2)
+
+    def _on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            self.connected = True
+            print("MQTT connected, subscribing to response topic...")
+            self.client.subscribe(self.topic_resp)
+        else:
+            print(f"MQTT connection failed with code {rc}")
+            self.connected = False 
+    
     def _on_message(self, client, userdata, msg):
         try:
             self.last_response = json.loads(msg.payload.decode())
@@ -40,7 +54,12 @@ class Batclant:
             if value is not None:
                 cmd["value"] = value
 
+            if not self.connected:
+                print("MQTT not connected, waiting to reconnect...")
+                while not self.connected:
+                    time.sleep(0.1)
             self.client.publish(self.topic_cmd, json.dumps(cmd))
+            
 
             start_time = time.time()
             while self.last_response is None:
@@ -76,6 +95,35 @@ class Batclant:
         if resp.get("status") != "ok":
             raise RuntimeError(f"Failed to get {device}.{function}: {resp.get('message')}")
         return resp.get("result")
+    
+    def safe_set_value(self, device, function, value, timeout=2.0, retries=3):
+        for attempt in range(retries):
+            try:
+                return self.set_value(device, function, value, timeout=timeout)
+            except RuntimeError as e:
+                print(f"Warning: {e}, attempt {attempt+1}/{retries}")
+                try:
+                    print("Reconnecting MQTT client...")
+                    self.client.reconnect()
+                except Exception:
+                    print("MQTT reconnect failed, will retry...")
+                time.sleep(1)
+        raise RuntimeError(f"Failed to set {device}.{function} after {retries} retries")
+
+
+    def safe_get_value(self, device, function, timeout=2.0, retries=3):
+        for attempt in range(retries):
+            try:
+                return self.get_value(device, function, timeout=timeout)
+            except RuntimeError as e:
+                print(f"Warning: {e}, attempt {attempt+1}/{retries}")
+                try:
+                    print("Reconnecting MQTT client...")
+                    self.client.reconnect()
+                except Exception:
+                    print("MQTT reconnect failed, will retry...")
+                time.sleep(1)
+        raise RuntimeError(f"Failed to get {device}.{function} after {retries} retries")
 
     # ----------------------------
     # Stop MQTT loop gracefully

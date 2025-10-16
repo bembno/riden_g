@@ -87,23 +87,23 @@ def get_AC_instantenious(obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0','1-0:21:.7.0',
 def initialize_values():
     # Set Riden values
 
-    storage.set_value("riden", "set_v_set", set_v_set_initial)
+    storage.safe_set_value("riden", "set_v_set", set_v_set_initial)
     # Get Riden values
-    output_ON=storage.get_value("riden", "is_output")
+    output_ON=storage.safe_get_value("riden", "is_output")
     print("Output status:",output_ON )
     if not output_ON:
-        storage.set_value("riden", "set_output", True)
+        storage.safe_set_value("riden", "set_output", True)
         print("Riden output turned ON")
 
         
 
-    print("V_SET:", storage.get_value("riden", "get_v_set"))
-    print("V_OUT:", storage.get_value("riden", "get_v_out"))
-    print("I_OUT:", storage.get_value("riden", "get_i_out"))
-    print("P_OUT:", storage.get_value("riden", "get_p_out"))
+    print("V_SET:", storage.safe_get_value("riden", "get_v_set"))
+    print("V_OUT:", storage.safe_get_value("riden", "get_v_out"))
+    print("I_OUT:", storage.safe_get_value("riden", "get_i_out"))
+    print("P_OUT:", storage.safe_get_value("riden", "get_p_out"))
     # Set and get inverter power
-    storage.set_value("inverter", "set_power", 0)
-    print("Inverter power:", storage.get_value("inverter", "get_power"))
+    storage.safe_set_value("inverter", "set_power", 0)
+    print("Inverter power:", storage.safe_get_value("inverter", "get_power"))
 
 def PtoI(power_kwatts, voltage=set_v_set_initial, max_current=30.0):
     if voltage==0:
@@ -136,23 +136,23 @@ def main_loop():
            
             #when stable do not change power setpoints
             if -deadband <= power_diff <= deadband:
-                invert_P=storage.get_value("inverter", "get_power")/1000
-                rid_P_out=storage.get_value("riden", "get_p_out")/1000
+                invert_P=storage.safe_get_value("inverter", "get_power")/1000
+                rid_P_out=storage.safe_get_value("riden", "get_p_out")/1000
                 print(f"Low P_dif ±{deadband:.3f} invert_P: {YELLOW}{invert_P:.3f}{RESET}, rid_P_out:{BRIGHT_GREEN} {rid_P_out:.3f}{RESET} kW ")
                 time.sleep(0.5)
                 continue
             #set power to inverter
             if  pid_power >= 0:
                 war_power=round(pid_power*1000)
-                storage.set_value("riden", "set_i_set", 0.0)
-                storage.set_value("inverter", "set_power", war_power)
+                storage.safe_set_value("riden", "set_i_set", 0.0)
+                storage.safe_set_value("inverter", "set_power", war_power)
                 print(f"Setting inverter power to: {YELLOW}{war_power:.2f}{RESET} W")
             #set current to riden
             elif pid_power < 0:
-                storage.set_value("inverter", "set_power", 0)
-                v_out = storage.get_value("riden", "get_v_out")
+                storage.safe_set_value("inverter", "set_power", 0)
+                v_out = storage.safe_get_value("riden", "get_v_out")
                 current=PtoI(pid_power,v_out )
-                storage.set_value("riden", "set_i_set", current)
+                storage.safe_set_value("riden", "set_i_set", current)
                 print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} get_V_out:  {v_out:.2f} V")
 
             print("-----")
@@ -166,8 +166,8 @@ def main_loop():
             print(f"{RED} Error in main loop: {e}, activating safety mode...{RESET}")
             try:
                 # SAFETY: reset devices
-                storage.set_value("inverter", "set_power", 0)
-                storage.set_value("riden", "set_i_set", 0.0)
+                storage.safe_set_value("inverter", "set_power", 0)
+                storage.safe_set_value("riden", "set_i_set", 0.0)
             except Exception as e2:
                 print(f"{RED}Error setting safe values: {e2}{RESET}")
 
@@ -178,8 +178,8 @@ except KeyboardInterrupt:
 finally:
     # SAFETY: always reset devices
     try:
-        storage.set_value("inverter", "set_power", 0)
-        storage.set_value("riden", "set_i_set", 0.0)
+        storage.safe_set_value("inverter", "set_power", 0)
+        storage.safe_set_value("riden", "set_i_set", 0.0)
     except Exception as e:
         print(f"Error setting safe values: {e}")
     storage.close()
