@@ -134,13 +134,22 @@ class Riden:
         return None
 
 
-    def write_multiple(self, register: int, values: tuple or list) -> tuple:
-        try:
-            return self.master.execute(
-                self.address, WRITE_MULTIPLE_REGISTERS, register, 1, values
-            )
-        except ModbusInvalidResponseError:
-            return self.write_multiple(register, values)
+    # def write_multiple(self, register: int, values: tuple or list) -> tuple:
+    #     try:
+    #         return self.master.execute(
+    #             self.address, WRITE_MULTIPLE_REGISTERS, register, 1, values
+    #         )
+    #     except ModbusInvalidResponseError:
+    #         return self.write_multiple(register, values)
+    def write_multiple(self, register: int, values: list[int] | tuple[int, ...], retries=3, delay=0.2):
+        for attempt in range(retries):
+            try:
+                return self.master.execute(self.address, WRITE_MULTIPLE_REGISTERS, register, 1, values)
+            except ModbusInvalidResponseError as e:
+                print(f"Write multiple failed ({attempt+1}/{retries}): {e}")
+                time.sleep(delay)
+        print("Failed to write multiple registers after retries")
+        return None
         
     def init(self):
         data = self.read(0, 10)  # example: read 10 registers starting at 0
