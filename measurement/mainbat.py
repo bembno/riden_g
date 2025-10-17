@@ -117,6 +117,11 @@ def PtoI(power_kwatts, voltage=set_v_set_initial, max_current=30.0):
 
 def main_loop():
     deadband=0.02  # kW
+    invert_P=0.0
+    rid_P_out=0.0
+    current=0.0
+    v_out=0.0
+
     initialize_values()
     while True:
         try:
@@ -128,11 +133,11 @@ def main_loop():
                 continue
             #calcualte power difference
             power_diff = import_p-export_p  if import_p is not None and export_p is not None else 0.0
-            print(f"Import: {import_p:.3f} kW, Export: {export_p:.3f} kW P_dif: {MAGENTA} {power_diff:.3f} {RESET} kW, L1:{L1:.3f}, L2:{L2:.3f}, L3:{L3:.3f}")
+            #print(f"Import: {import_p:.3f} kW, Export: {export_p:.3f} kW P_dif: {MAGENTA} {power_diff:.3f} {RESET} kW, L1:{L1:.3f}, L2:{L2:.3f}, L3:{L3:.3f}")
             
             #pid control
             pid_power = pid.adjustPower(power_diff)
-            print(f"PID output (power setpoint): {CYAN}{pid_power:.3f}{RESET} kW")
+            #print(f"PID output (power setpoint): {CYAN}{pid_power:.3f}{RESET} kW")
            
             #when stable do not change power setpoints
             if -deadband <= power_diff <= deadband:
@@ -146,16 +151,29 @@ def main_loop():
                 war_power=round(pid_power*1000)
                 storage.safe_set_value("riden", "set_i_set", 0.0)
                 storage.safe_set_value("inverter", "set_power", war_power)
-                print(f"Setting inverter power to: {YELLOW}{war_power:.2f}{RESET} W")
+                #print(f"Setting inverter power to: {YELLOW}{war_power:.2f}{RESET} W")
             #set current to riden
             elif pid_power < 0:
                 storage.safe_set_value("inverter", "set_power", 0)
                 v_out = storage.safe_get_value("riden", "get_v_out")
                 current=PtoI(pid_power,v_out )
                 storage.safe_set_value("riden", "set_i_set", current)
-                print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} get_V_out:  {v_out:.2f} V")
+                #print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} get_V_out:  {v_out:.2f} V")
 
-            print("-----")
+            print(
+                f"t:{time.strftime('%H:%M:%S')}, "
+                f"i:{BLUE}{import_p:.3f}{RESET}, "
+                f"e:{BRIGHT_MAGENTA}{export_p:.3f}{RESET}, "
+                f"di:{MAGENTA}{power_diff:.3f}{RESET}, "
+                f"pid:{CYAN}{pid_power:.3f}{RESET}, "
+                f"L1:{L1:.3f}, L2:{L2:.3f}, L3:{L3:.3f}, "
+                f"inv:{YELLOW}{war_power:.3f}{RESET}, "
+                f"rid:{BRIGHT_GREEN}{rid_P_out:.3f}{RESET}, "
+                f"I:{BRIGHT_GREEN}{current:.3f}{RESET}, "
+                f"V:{v_out:.3f}"
+            )
+
+            #print("-----")
             #log data to file
             with open(file_name, "a") as f:
                 f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{import_p:.3f},{export_p:.3f},{power_diff:.3f},{pid_power:.3f},{L1:.3f},{L2:.3f},{L3:.3f}\n")
