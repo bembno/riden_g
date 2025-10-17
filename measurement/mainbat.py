@@ -113,6 +113,37 @@ def PtoI(power_kwatts, voltage=set_v_set_initial, max_current=30.0):
     safe_current = round(min(current, max_current),3)
     return safe_current
 
+def print_status_line(import_p, export_p, power_diff, pid_power, L1, L2, L3,
+                      war_power, rid_P_out, current, v_out):
+    """Prints a color-coded status line of power flow and system values."""
+
+    # Conditional color wrappers
+    export_color = BRIGHT_MAGENTA if export_p > 0.01 else RESET
+    inv_color    = YELLOW if war_power > 0.01 else RESET
+    rid_color    = BRIGHT_GREEN if rid_P_out > 0.01 else RESET
+    curr_color   = BRIGHT_GREEN if current > 0.01 else RESET
+
+    # Power difference color logic (import/export balance)
+    if power_diff > 0.01:
+        diff_color = MAGENTA      # importing more power
+    elif power_diff < -0.01:
+        diff_color = BRIGHT_CYAN  # exporting more power
+    else:
+        diff_color = RESET        # near zero (balanced)
+
+    # Build and print formatted line
+    print(
+        f"t:{time.strftime('%H:%M:%S')}, "
+        f"i:{BLUE}{import_p:.3f}{RESET}, "
+        f"e:{export_color}{export_p:.3f}{RESET}, "
+        f"di:{diff_color}{power_diff:.3f}{RESET}, "
+        f"pid:{CYAN}{pid_power:.3f}{RESET}, "
+        f"L1:{L1:.3f}, L2:{L2:.3f}, L3:{L3:.3f}, "
+        f"inv:{inv_color}{war_power:.3f}{RESET}, "
+        f"rid:{rid_color}{rid_P_out:.3f}{RESET}, "
+        f"I:{curr_color}{current:.3f}{RESET}, "
+        f"V:{v_out:.3f}"
+    )
 
 
 def main_loop():
@@ -160,23 +191,13 @@ def main_loop():
                 storage.safe_set_value("riden", "set_i_set", current)
                 #print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} get_V_out:  {v_out:.2f} V")
 
-            print(
-                f"t:{time.strftime('%H:%M:%S')}, "
-                f"i:{BLUE}{import_p:.3f}{RESET}, "
-                f"e:{BRIGHT_MAGENTA}{export_p:.3f}{RESET}, "
-                f"di:{MAGENTA}{power_diff:.3f}{RESET}, "
-                f"pid:{CYAN}{pid_power:.3f}{RESET}, "
-                f"L1:{L1:.3f}, L2:{L2:.3f}, L3:{L3:.3f}, "
-                f"inv:{YELLOW}{war_power:.3f}{RESET}, "
-                f"rid:{BRIGHT_GREEN}{rid_P_out:.3f}{RESET}, "
-                f"I:{BRIGHT_GREEN}{current:.3f}{RESET}, "
-                f"V:{v_out:.3f}"
-            )
 
-            #print("-----")
+            print_status_line(import_p, export_p, power_diff, pid_power, L1, L2, L3,
+                      war_power, rid_P_out, current, v_out)
+            
             #log data to file
-            with open(file_name, "a") as f:
-                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{import_p:.3f},{export_p:.3f},{power_diff:.3f},{pid_power:.3f},{L1:.3f},{L2:.3f},{L3:.3f}\n")
+            # with open(file_name, "a") as f:
+            #     f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{import_p:.3f},{export_p:.3f},{power_diff:.3f},{pid_power:.3f},{L1:.3f},{L2:.3f},{L3:.3f}\n")
 
             time.sleep(0.5)
 
