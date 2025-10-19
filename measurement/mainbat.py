@@ -78,12 +78,10 @@ def get_listed_obis_values( df, obis_list):
 
 def get_AC_instantenious(obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0','1-0:21:.7.0', '1-0:41:.7.0', '1-0:41:.7.0']):
     df = get_all_riden_to_df()
-    #obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0','1-0:21:.7.0', '1-0:41:.7.0', '1-0:41:.7.0']
     AC_values = get_listed_obis_values(df, obis_codes)
     return AC_values
 
-# import_p, export_p= get_AC_instantenious()[:2]
-# print(import_p, export_p)
+
 def initialize_values():
     # Set Riden values
 
@@ -133,22 +131,21 @@ def print_status_line(import_p, export_p, power_diff, pid_power, L1, L2, L3,
 
     # Build and print formatted line
     print(
-        f"t:{time.strftime('%H:%M:%S')}, "
-        f"i:{BLUE}{import_p:.3f}{RESET}, "
-        f"e:{export_color}{export_p:.3f}{RESET}, "
-        f"di:{diff_color}{power_diff:.3f}{RESET}, "
-        f"pid:{CYAN}{pid_power:.3f}{RESET}, "
-        f"L1:{L1:.3f}, L2:{L2:.3f}, L3:{L3:.3f}, "
-        f"inv:{inv_color}{war_power:.3f}{RESET}, "
-        f"rid:{rid_color}{rid_P_out:.3f}{RESET}, "
-        f"I:{curr_color}{current:.3f}{RESET}, "
-        f"V:{v_out:.3f}"
+        f"t:{time.strftime('%H:%M:%S')} "
+        f"i:{BLUE}{import_p:.3f}{RESET} "
+        f"e:{export_color}{export_p:.3f}{RESET} "
+        f"di:{diff_color}{power_diff:.3f}{RESET} "
+        f"pid:{CYAN}{pid_power:.3f}{RESET} "
+        f"L1:{L1:.3f}, L2:{L2:.3f}, L3:{L3:.3f} "
+        f"inv:{inv_color}{war_power:.0f}{RESET} "
+        f"rid:{rid_color}{rid_P_out:.3f}{RESET} "
+        f"I:{curr_color}{current:.1f}{RESET} "
+        f"V:{v_out:.1f}"
     )
 
 
 def main_loop():
     deadband=0.02  # kW
-    invert_P=0.0
     rid_P_out=0.0
     current=0.0
     v_out=0.0
@@ -156,6 +153,7 @@ def main_loop():
     initialize_values()
     while True:
         try:
+                    
             import_p, export_p,L1,L2,L3= get_AC_instantenious()[:5]
             #export_p=export_p+0.2
             if None in [import_p, export_p]:
@@ -169,32 +167,37 @@ def main_loop():
             #pid control
             pid_power = pid.adjustPower(power_diff)
             #print(f"PID output (power setpoint): {CYAN}{pid_power:.3f}{RESET} kW")
-           
+            invert_P=storage.safe_get_value("inverter", "get_power")/1000
+            rid_P_out=storage.safe_get_value("riden", "get_p_out")/1000
+            #set inverter power in watts
+            inv_power=round(pid_power*1000)
+            #set riden current in amps
+            v_out = storage.safe_get_value("riden", "get_v_out")
+            current=PtoI(pid_power,v_out )
+
             #when stable do not change power setpoints
             if -deadband <= power_diff <= deadband:
-                invert_P=storage.safe_get_value("inverter", "get_power")/1000
-                rid_P_out=storage.safe_get_value("riden", "get_p_out")/1000
                 print(f"Low P_dif ±{deadband:.3f} invert_P: {YELLOW}{invert_P:.3f}{RESET}, rid_P_out:{BRIGHT_GREEN} {rid_P_out:.3f}{RESET} kW ")
                 time.sleep(0.5)
                 continue
             #set power to inverter
             if  pid_power >= 0:
-                war_power=round(pid_power*1000)
-                storage.safe_set_value("riden", "set_i_set", 0.0)
-                storage.safe_set_value("inverter", "set_power", war_power)
+                current=0.0
+                storage.safe_set_value("riden", "set_i_set", current)
+                storage.safe_set_value("inverter", "set_power", inv_power)
                 #print(f"Setting inverter power to: {YELLOW}{war_power:.2f}{RESET} W")
             #set current to riden
             elif pid_power < 0:
-                storage.safe_set_value("inverter", "set_power", 0)
-                v_out = storage.safe_get_value("riden", "get_v_out")
-                current=PtoI(pid_power,v_out )
+                inv_power=0
+                storage.safe_set_value("inverter", "set_power", inv_power)
                 storage.safe_set_value("riden", "set_i_set", current)
                 #print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} get_V_out:  {v_out:.2f} V")
 
+            
 
             print_status_line(import_p, export_p, power_diff, pid_power, L1, L2, L3,
-                      war_power, rid_P_out, current, v_out)
-            
+                      inv_power, rid_P_out, current, v_out)
+
             #log data to file
             # with open(file_name, "a") as f:
             #     f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{import_p:.3f},{export_p:.3f},{power_diff:.3f},{pid_power:.3f},{L1:.3f},{L2:.3f},{L3:.3f}\n")
@@ -202,13 +205,15 @@ def main_loop():
             time.sleep(0.5)
 
         except Exception as e:
-            print(f"{RED} Error in main loop: {e}, activating safety mode...{RESET}")
+            print(f"{RED}Error in main loop: {e}{RESET}")
             try:
-                # SAFETY: reset devices
                 storage.safe_set_value("inverter", "set_power", 0)
                 storage.safe_set_value("riden", "set_i_set", 0.0)
             except Exception as e2:
-                print(f"{RED}Error setting safe values: {e2}{RESET}")
+                print(f"{RED}Safety mode failed: {e2}{RESET}")
+                storage._restart_mqtt()
+            time.sleep(5)  # cooldown before retry
+            continue
 
 try:
     main_loop()

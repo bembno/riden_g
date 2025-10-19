@@ -15,6 +15,7 @@ class Batclant:
         self.connected = False 
         self.client.on_message = self._on_message
         self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
 
         self.client.loop_start()
         self._connect()
@@ -42,6 +43,34 @@ class Batclant:
             self.last_response = json.loads(msg.payload.decode())
         except Exception as e:
             self.last_response = {"status": "error", "message": f"Invalid JSON: {e}"}
+    
+    def _on_disconnect(self, client, userdata, rc):
+        self.connected = False
+        print(f"MQTT disconnected (code {rc}), attempting reconnect...")
+        while not self.connected:
+            try:
+                self.client.reconnect()
+                time.sleep(1)
+            except Exception as e:
+                print(f"Reconnect failed: {e}, retrying in 5s...")
+                time.sleep(5)
+                
+    def _restart_mqtt(self):
+        try:
+            print("Restarting MQTT client loop...")
+            self.client.loop_stop()
+            self.client.disconnect()
+        except Exception:
+            pass
+        time.sleep(2)
+        self.client = mqtt.Client()
+        self.client.on_message = self._on_message
+        self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
+        self.last_response = None
+        self.connected = False
+        self.client.loop_start()
+        self._connect()
 
     # ----------------------------
     # Generic send
