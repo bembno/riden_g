@@ -49,12 +49,13 @@ class Batclant:
         print(f"MQTT disconnected (code {rc}), attempting reconnect...")
         while not self.connected:
             try:
-                self.client.reconnect()
+                #self.client.reconnect()
+                self._connect()
                 time.sleep(1)
             except Exception as e:
                 print(f"Reconnect failed: {e}, retrying in 5s...")
                 time.sleep(5)
-                
+
     def _restart_mqtt(self):
         try:
             print("Restarting MQTT client loop...")
@@ -75,7 +76,7 @@ class Batclant:
     # ----------------------------
     # Generic send
     # ----------------------------
-    def _send_command(self, device: str, function: str, value=None, timeout=2.0, retries=3):
+    def _send_command(self, device: str, function: str, value=None, timeout=2.0, retries=1):
         """Internal method to send command and wait for response with retry."""
         for attempt in range(retries):
             self.last_response = None
@@ -125,7 +126,7 @@ class Batclant:
             raise RuntimeError(f"Failed to get {device}.{function}: {resp.get('message')}")
         return resp.get("result")
     
-    def safe_set_value(self, device, function, value, timeout=2.0, retries=3):
+    def safe_set_value(self, device, function, value, timeout=2.0, retries=1):
         for attempt in range(retries):
             try:
                 return self.set_value(device, function, value, timeout=timeout)
@@ -140,7 +141,7 @@ class Batclant:
         raise RuntimeError(f"Failed to set {device}.{function} after {retries} retries")
 
 
-    def safe_get_value(self, device, function, timeout=2.0, retries=3):
+    def safe_get_value(self, device, function, timeout=2.0, retries=1):
         for attempt in range(retries):
             try:
                 return self.get_value(device, function, timeout=timeout)
