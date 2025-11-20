@@ -76,10 +76,19 @@ def get_listed_obis_values( df, obis_list):
             values.append(None)
     return values
 
-def get_AC_instantenious(obis_codes = ['1-0:1:.7.0', '1-0:2:.7.0','1-0:21:.7.0', '1-0:41:.7.0', '1-0:41:.7.0']):
+def get_AC_instantenious(obis_codes=None):
+    if obis_codes is None:
+        obis_codes = [
+            '1-0:1:.7.0',   # total import (or phase-independent)
+            '1-0:2:.7.0',   # total export (or phase-independent)
+            '1-0:21:.7.0',  # L1
+            '1-0:31:.7.0',  # L2  <- corrected
+            '1-0:41:.7.0'   # L3
+        ]
     df = get_all_riden_to_df()
     AC_values = get_listed_obis_values(df, obis_codes)
     return AC_values
+
 
 def set_riden_out(output_ON= True):
     # Get Riden values
@@ -150,13 +159,14 @@ def main_loop():
     rid_P_out=0.0
     current=0.0
     v_out=0.0
-
+    storage.safe_set_value("pindriver", "connect", None)
+    #storage.safe_set_value("pindriver", "disconnect", None)
     initialize_values()
     while True:
         try:
                     
             import_p, export_p,L1,L2,L3= get_AC_instantenious()[:5]
-            #export_p=export_p+0.6
+            #export_p=export_p+1.0
             if None in [import_p, export_p]:
                 print(f"{RED}Invalid P1 data, retrying...{RESET}")
                 time.sleep(0.5)
@@ -193,8 +203,11 @@ def main_loop():
                                   war_power=inv_power)
                 current=0.0
                 storage.safe_set_value("riden", "set_i_set", current)
+                #storage.safe_set_value("pindriver", "connect", None)
+                storage.safe_set_value("pindriver", "disconnect", None)
             elif pid_power < 0:
                 #inv_power=0
+                storage.safe_set_value("pindriver", "connect", None)
                 storage.safe_set_value("inverter", "set_power", inv_power)
                 storage.safe_set_value("riden", "set_output", True)
 

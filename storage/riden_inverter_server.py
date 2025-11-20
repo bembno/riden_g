@@ -4,6 +4,8 @@ import paho.mqtt.client as mqtt
 from drivers.riden import Riden
 from drivers.InverterController import InverterController
 import time
+from drivers.PinDriver import PinDriver
+
 
 BROKER = "localhost"
 PORT = 1883
@@ -16,7 +18,7 @@ lock = threading.Lock()
 # Global device references
 charger = None
 inverter = None
-
+pindriver = None 
 
 def connect_charger():
     global charger
@@ -46,10 +48,18 @@ def connect_inverter():
             print("Inverter connection failed, retrying in 5s:", e)
             time.sleep(5)
 
+def connect_pindriver(pin=17):
+    global pindriver
+    try:
+        print(f"Initializing PinDriver on GPIO{pin}...")
+        pindriver = PinDriver(pin)
+    except Exception as e:
+        print("PinDriver init failed:", e)
 
 # Initialize devices (blocking until successful)
 connect_charger()
 connect_inverter()
+connect_pindriver()
 
 
 def handle_command(payload: dict):
@@ -102,6 +112,24 @@ def handle_command(payload: dict):
                         "status": "error",
                         "device": "inverter",
                         "message": f"Invalid inverter command: {action}",
+                    }
+            elif device == "pindriver":
+                if pindriver is None:
+                    connect_pindriver()
+
+                if action == "connect":
+                    pindriver.connect()
+                    response = {"status": "ok", "device": "pindriver", "action": "connect"}
+
+                elif action == "disconnect":
+                    pindriver.disconnect()
+                    response = {"status": "ok", "device": "pindriver", "action": "disconnect"}
+
+                else:
+                    response = {
+                        "status": "error",
+                        "device": "pindriver",
+                        "message": f"Invalid pin driver command: {action}"
                     }
 
             else:
