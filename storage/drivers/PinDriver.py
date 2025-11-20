@@ -8,11 +8,9 @@ class PinDriver:
         self.pin = LED(pin)
 
     def connect(self) -> None:
-        """Set pin to 0V = connected (active-low)."""
         self.pin.on()
 
     def disconnect(self) -> None:
-        """Set pin to HIGH = disconnected."""
         self.pin.off()
 
 
