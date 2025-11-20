@@ -37,7 +37,10 @@ meter = Meter()
 storage = Batclant()
 pid = PIDController( kp=kp, ki=ki, kd=kd, setpoint=setpoint)
 
-
+last_riden_set = 0
+MIN_RIDEN_INTERVAL = 0.15  # 150ms
+last_p1 = 0
+last_df = pd.DataFrame()
 
 # Ensure CSV file has headers
 if not os.path.exists(file_name):
@@ -55,15 +58,27 @@ if not os.path.exists(file_name):
         ])
 def get_all_riden_to_df():
     try:
+        global last_p1, last_df
+
+        now = time.time()
+        if now - last_p1 < 1:  # DSMR sends once per second
+            return last_df     # reuse last telegram
+        
+        last_p1 = now
         meter.connect()  # connect once
         parsed_data = meter.read_telegram()  # read full telegram
         df = meter.to_dataframe(parsed_data)
+        last_df = df
         return df
     except Exception as e:
         print(f"Error reading DSMR meter: {e}")
-        return pd.DataFrame()  # fallback empty
+        last_df = pd.DataFrame()  # <- important
+        return last_df
 
 def get_listed_obis_values( df, obis_list):
+    if df is None or df.empty or "OBIS" not in df.columns:
+        return [None] * len(obis_list)
+    
     values = []
     for obis in obis_list:
         row = df[df['OBIS'] == obis]
@@ -112,6 +127,13 @@ def initialize_values():
     except Exception as e:
         print(f"Error initializing Riden and inverter values: {e}")
 
+def throttled_set_riden(param, value):
+    global last_riden_set
+    now = time.time()
+    if now - last_riden_set < MIN_RIDEN_INTERVAL:
+        time.sleep(MIN_RIDEN_INTERVAL - (now - last_riden_set))
+    last_riden_set = time.time()
+    return storage.safe_set_value("riden", param, value)
 
 def PtoI(power_kwatts, voltage=set_v_set_initial, max_current=30.0):
     if voltage==0:
@@ -165,7 +187,14 @@ def main_loop():
     while True:
         try:
                     
-            import_p, export_p,L1,L2,L3= get_AC_instantenious()[:5]
+            #import_p, export_p,L1,L2,L3= get_AC_instantenious()[:5]
+            vals = get_AC_instantenious()[:5]
+            import_p = vals[0] if len(vals) > 0 else None
+            export_p = vals[1] if len(vals) > 1 else None
+            L1 = vals[2] if len(vals) > 2 else None
+            L2 = vals[3] if len(vals) > 3 else None
+            L3 = vals[4] if len(vals) > 4 else None
+
             #export_p=export_p+1.0
             if None in [import_p, export_p]:
                 print(f"{RED}Invalid P1 data, retrying...{RESET}")
@@ -173,13 +202,10 @@ def main_loop():
                 continue
             #calcualte power difference
             power_diff = import_p-export_p  if import_p is not None and export_p is not None else 0.0
-            #print(f"Import: {import_p:.3f} kW, Export: {export_p:.3f} kW P_dif: {MAGENTA} {power_diff:.3f} {RESET} kW, L1:{L1:.3f}, L2:{L2:.3f}, L3:{L3:.3f}")
-            
+
             #pid control
             pid_power = pid.adjustPower(power_diff)
-            #print(f"PID output (power setpoint): {CYAN}{pid_power:.3f}{RESET} kW")
-            #invert_P=storage.safe_get_value("inverter", "get_power")/1000
-            #rid_P_out=storage.safe_get_value("riden", "get_p_out")/1000
+
             #set inverter power in watts
             inv_power=round(pid_power*1000)
             #set riden current in amps
@@ -187,22 +213,17 @@ def main_loop():
 
             #when stable do not change power setpoints
             if -deadband <= power_diff <= deadband:
-                #print(f"Low P_dif ±{deadband:.3f} invert_P: {YELLOW}{invert_P:.3f}{RESET}, rid_P_out:{BRIGHT_GREEN} {rid_P_out:.3f}{RESET} kW ")
                 print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff, pid_power=pid_power, L1=L1, L2=L2, L3=L3,war_power=inv_power)
                 #time.sleep(0.5)
                 continue
             #set power to inverter
             if  pid_power >= 0:
-                #invert_P=storage.safe_get_value("inverter", "get_power")/1000
-                
-
-
-
                 storage.safe_set_value("inverter", "set_power", inv_power)
                 print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff, pid_power=pid_power, L1=L1, L2=L2, L3=L3,
                                   war_power=inv_power)
                 current=0.0
-                storage.safe_set_value("riden", "set_i_set", current)
+                #storage.safe_set_value("riden", "set_i_set", current)
+                throttled_set_riden("set_i_set", current)
                 #storage.safe_set_value("pindriver", "connect", None)
                 storage.safe_set_value("pindriver", "disconnect", None)
             elif pid_power < 0:
@@ -213,8 +234,13 @@ def main_loop():
 
                 v_out = storage.safe_get_value("riden", "get_v_out")
                 current=PtoI(pid_power,v_out )
-                rid_P_out=storage.safe_get_value("riden", "get_p_out")/1000
-                storage.safe_set_value("riden", "set_i_set", current)
+
+                #rid_P_out=storage.safe_get_value("riden", "get_p_out")/1000
+                p = storage.safe_get_value("riden", "get_p_out")
+                rid_P_out = p/1000 if p not in (None, "") else 0.0   
+
+                #storage.safe_set_value("riden", "set_i_set", current)
+                throttled_set_riden("set_i_set", current)
                 #print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} get_V_out:  {v_out:.2f} V")
                 print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff, pid_power=pid_power, L1=L1, L2=L2, L3=L3,
                        rid_P_out=rid_P_out, current=current, v_out=v_out)
@@ -250,7 +276,10 @@ finally:
     # SAFETY: always reset devices
     try:
         storage.safe_set_value("inverter", "set_power", 0)
-        storage.safe_set_value("riden", "set_i_set", 0.0)
+        throttled_set_riden("set_i_set",  0.0)
+        #storage.safe_set_value("riden", "set_i_set", 0.0)
+        storage.safe_set_value("pindriver", "disconnect", None)
+
     except Exception as e:
         print(f"Error setting safe values: {e}")
     storage.close()
