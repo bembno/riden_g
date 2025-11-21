@@ -97,8 +97,8 @@ def get_AC_instantenious(obis_codes=None):
             '1-0:1:.7.0',   # total import (or phase-independent)
             '1-0:2:.7.0',   # total export (or phase-independent)
             '1-0:21:.7.0',  # L1
-            '1-0:31:.7.0',  # L2  <- corrected
-            '1-0:41:.7.0'   # L3
+            '1-0:41:.7.0',  # L2  <- corrected
+            '1-0:61:.7.0'   # L3
         ]
     df = get_all_riden_to_df()
     AC_values = get_listed_obis_values(df, obis_codes)
@@ -214,7 +214,7 @@ def main_loop():
             #when stable do not change power setpoints
             if -deadband <= power_diff <= deadband:
                 print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff, pid_power=pid_power, L1=L1, L2=L2, L3=L3,war_power=inv_power)
-                #time.sleep(0.5)
+                time.sleep(0.5)
                 continue
             #set power to inverter
             if  pid_power >= 0:
