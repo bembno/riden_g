@@ -19,6 +19,8 @@ lock = threading.Lock()
 charger = None
 inverter = None
 pindriver = None 
+last_client_msg = time.time()
+WATCHDOG_TIMEOUT = 5.0   # seconds without data → set inverter to 0 W
 
 def connect_charger():
     global charger
@@ -63,7 +65,10 @@ connect_pindriver()
 
 
 def handle_command(payload: dict):
+
     global charger, inverter
+    global last_client_msg
+    last_client_msg = time.time()
     device = payload.get("device")
     action = payload.get("action")
     value = payload.get("value", None)
@@ -94,12 +99,14 @@ def handle_command(payload: dict):
             elif device == "inverter":
                 if inverter is None:
                     connect_inverter()
+  
                 if action == "set_power" and value is not None:
+
                     inverter.ModifyPower(value)
                     response = {
                         "status": "ok",
                         "device": "inverter",
-                        "result": inverter.GetCurrentPower(),
+                        "result": value,
                     }
                 elif action == "get_power":
                     response = {
@@ -171,4 +178,23 @@ client = mqtt.Client()
 client.on_connect = on_connect
 client.on_message = on_message
 client.connect(BROKER, PORT, 60)
-client.loop_forever()
+#client.loop_forever()
+# === START MQTT IN BACKGROUND ===
+client.loop_start()
+
+print("MQTT loop started, watchdog active...")
+
+# === WATCHDOG LOOP ===
+while True:
+    now = time.time()
+
+    # If no message from client within timeout → safety shutdown
+    if now - last_client_msg > WATCHDOG_TIMEOUT:
+        try:
+            with lock:
+                print("WATCHDOG: No command from client → forcing inverter to 0 W")
+                inverter.ModifyPower(0)
+        except Exception as e:
+            print("WATCHDOG ERROR:", e)
+
+    time.sleep(0.5)
