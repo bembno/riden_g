@@ -6,23 +6,32 @@ from drivers.InverterController import InverterController
 import time
 from drivers.PinDriver import PinDriver
 
-
+# -----------------------------
+# CONFIG
+# -----------------------------
 BROKER = "localhost"
 PORT = 1883
 TOPIC_CMD = "devices/command"
 TOPIC_RESP = "devices/response"
 
-# Thread lock for safety
-lock = threading.Lock()
+WATCHDOG_TIMEOUT = 5.0   # seconds → if no client msg → inverter to 0 W
+CHECK_INTERVAL = 0.5     # watchdog loop sleep time
 
-# Global device references
+# -----------------------------
+# GLOBALS
+# -----------------------------
+lock = threading.Lock()
 charger = None
 inverter = None
-pindriver = None 
+pindriver = None
 last_client_msg = time.time()
-WATCHDOG_TIMEOUT = 5.0   # seconds without data → set inverter to 0 W
+
+# ============================================================
+#  DEVICE CONNECTION FUNCTIONS
+# ============================================================
 
 def connect_charger():
+    """Connect to Riden charger with retry loop."""
     global charger
     while True:
         try:
@@ -36,7 +45,7 @@ def connect_charger():
 
 
 def connect_inverter():
-    """Connect to InverterController on /dev/ttyUSB1 with retries."""
+    """Connect to InverterController on /dev/ttyUSB1 with retry loop."""
     global inverter
     while True:
         try:
@@ -50,7 +59,9 @@ def connect_inverter():
             print("Inverter connection failed, retrying in 5s:", e)
             time.sleep(5)
 
+
 def connect_pindriver(pin=17):
+    """Initialize the GPIO PinDriver."""
     global pindriver
     try:
         print(f"Initializing PinDriver on GPIO{pin}...")
@@ -58,104 +69,89 @@ def connect_pindriver(pin=17):
     except Exception as e:
         print("PinDriver init failed:", e)
 
-# Initialize devices (blocking until successful)
-connect_charger()
-connect_inverter()
-connect_pindriver()
+# ============================================================
+#  HANDLING COMMANDS
+# ============================================================
+
+def handle_riden(action, value):
+    global charger
+    if charger is None:
+        connect_charger()
+
+    if hasattr(charger, action):
+        method = getattr(charger, action)
+        result = method(value) if value is not None else method()
+        return {"status": "ok", "device": "riden", "action": action, "result": result}
+
+    return {"status": "error", "device": "riden", "message": f"No such method: {action}"}
+
+
+def handle_inverter(action, value):
+    global inverter
+    if inverter is None:
+        connect_inverter()
+
+    if action == "set_power" and value is not None:
+        inverter.ModifyPower(value)
+        return {"status": "ok", "device": "inverter", "result": value}
+
+    if action == "get_power":
+        return {"status": "ok", "device": "inverter", "result": inverter.GetCurrentPower()}
+
+    return {
+        "status": "error",
+        "device": "inverter",
+        "message": f"Invalid inverter command: {action}",
+    }
+
+
+def handle_pindriver(action):
+    global pindriver
+    if pindriver is None:
+        connect_pindriver()
+
+    if action == "connect":
+        pindriver.connect()
+        return {"status": "ok", "device": "pindriver", "action": "connect"}
+
+    if action == "disconnect":
+        pindriver.disconnect()
+        return {"status": "ok", "device": "pindriver", "action": "disconnect"}
+
+    return {"status": "error", "device": "pindriver", "message": f"Invalid pin driver command: {action}"}
 
 
 def handle_command(payload: dict):
-
-    global charger, inverter
+    """Main command handler."""
     global last_client_msg
-    last_client_msg = time.time()
+    last_client_msg = time.time()  # update watchdog timestamp
+
     device = payload.get("device")
     action = payload.get("action")
-    value = payload.get("value", None)
-
-    response = {}
+    value = payload.get("value")
 
     try:
         with lock:
             if device == "riden":
-                if charger is None:
-                    connect_charger()
-                if hasattr(charger, action):
-                    method = getattr(charger, action)
-                    result = method(value) if value is not None else method()
-                    response = {
-                        "status": "ok",
-                        "device": "riden",
-                        "action": action,
-                        "result": result,
-                    }
-                else:
-                    response = {
-                        "status": "error",
-                        "device": "riden",
-                        "message": f"No such method: {action}",
-                    }
+                return handle_riden(action, value)
 
             elif device == "inverter":
-                if inverter is None:
-                    connect_inverter()
-  
-                if action == "set_power" and value is not None:
+                return handle_inverter(action, value)
 
-                    inverter.ModifyPower(value)
-                    response = {
-                        "status": "ok",
-                        "device": "inverter",
-                        "result": value,
-                    }
-                elif action == "get_power":
-                    response = {
-                        "status": "ok",
-                        "device": "inverter",
-                        "result": inverter.GetCurrentPower(),
-                    }
-                else:
-                    response = {
-                        "status": "error",
-                        "device": "inverter",
-                        "message": f"Invalid inverter command: {action}",
-                    }
             elif device == "pindriver":
-                if pindriver is None:
-                    connect_pindriver()
-
-                if action == "connect":
-                    pindriver.connect()
-                    response = {"status": "ok", "device": "pindriver", "action": "connect"}
-
-                elif action == "disconnect":
-                    pindriver.disconnect()
-                    response = {"status": "ok", "device": "pindriver", "action": "disconnect"}
-
-                else:
-                    response = {
-                        "status": "error",
-                        "device": "pindriver",
-                        "message": f"Invalid pin driver command: {action}"
-                    }
+                return handle_pindriver(action)
 
             else:
-                response = {
-                    "status": "error",
-                    "message": f"Unknown device: {device}",
-                }
+                return {"status": "error", "message": f"Unknown device: {device}"}
 
     except Exception as e:
-        response = {
-            "status": "error",
-            "message": f"Exception: {str(e)}",
-        }
-
-    print("Response:", response)
-    return response
+        return {"status": "error", "message": f"Exception: {str(e)}"}
 
 
-# MQTT Callbacks
+# ============================================================
+# MQTT CALLBACKS
+# ============================================================
+
 def on_connect(client, userdata, flags, rc):
     print("Connected to broker, code:", rc)
     client.subscribe(TOPIC_CMD)
@@ -173,28 +169,53 @@ def on_message(client, userdata, msg):
         print("Exception in on_message:", e)
 
 
-# MQTT Setup
-client = mqtt.Client()
-client.on_connect = on_connect
-client.on_message = on_message
-client.connect(BROKER, PORT, 60)
-#client.loop_forever()
-# === START MQTT IN BACKGROUND ===
-client.loop_start()
+# ============================================================
+# WATCHDOG
+# ============================================================
 
-print("MQTT loop started, watchdog active...")
+def watchdog_loop():
+    """Runs forever, ensures inverter is set to 0 when client stops sending data."""
+    global last_client_msg, inverter
 
-# === WATCHDOG LOOP ===
-while True:
-    now = time.time()
+    print("MQTT loop started, watchdog active...")
 
-    # If no message from client within timeout → safety shutdown
-    if now - last_client_msg > WATCHDOG_TIMEOUT:
-        try:
-            with lock:
-                print("WATCHDOG: No command from client → forcing inverter to 0 W")
-                inverter.ModifyPower(0)
-        except Exception as e:
-            print("WATCHDOG ERROR:", e)
+    while True:
+        now = time.time()
 
-    time.sleep(0.5)
+        if now - last_client_msg > WATCHDOG_TIMEOUT:
+            try:
+                with lock:
+                    print("WATCHDOG: No client messages → forcing inverter and riden to 0 W and out_off")
+                    inverter.ModifyPower(0)
+                    charger.set_output(False)
+            except Exception as e:
+                print("WATCHDOG ERROR:", e)
+
+        time.sleep(CHECK_INTERVAL)
+
+
+# ============================================================
+# MAIN PROGRAM INITIALIZATION
+# ============================================================
+
+def main():
+
+    # Connect hardware (blocking loops)
+    connect_charger()
+    connect_inverter()
+    connect_pindriver()
+
+    # Setup MQTT
+    client = mqtt.Client()
+    client.on_connect = on_connect
+    client.on_message = on_message
+
+    client.connect(BROKER, PORT, 60)
+    client.loop_start()
+
+    # Start watchdog
+    watchdog_loop()
+
+
+if __name__ == "__main__":
+    main()

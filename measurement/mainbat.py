@@ -56,7 +56,7 @@ if not os.path.exists(file_name):
             "L2_kW",
             "L3_kW"
         ])
-def get_all_riden_to_df():
+def get_all_P1_to_df():
     try:
         global last_p1, last_df
 
@@ -89,6 +89,11 @@ def get_listed_obis_values( df, obis_list):
                 values.append(None)
         else:
             values.append(None)
+    if len(values) == 8:
+        values[2] = values[2] - values[5]  # L1 import - export
+        values[3] = values[3] - values[6]  # L2 import - export
+        values[4] = values[4] - values[7]  # L3
+    
     return values
 
 def get_AC_instantenious(obis_codes=None):
@@ -97,11 +102,15 @@ def get_AC_instantenious(obis_codes=None):
             '1-0:1:.7.0',   # total import (or phase-independent)
             '1-0:2:.7.0',   # total export (or phase-independent)
             '1-0:21:.7.0',  # L1
-            '1-0:41:.7.0',  # L2  <- corrected
-            '1-0:61:.7.0'   # L3
+            '1-0:41:.7.0',  # L2  
+            '1-0:61:.7.0',  # L3
+            '1-0:22:.7.0',  # -L1
+            '1-0:42:.7.0',  # -L2  
+            '1-0:62:.7.0'   # -L3
         ]
-    df = get_all_riden_to_df()
+    df = get_all_P1_to_df()
     AC_values = get_listed_obis_values(df, obis_codes)
+    
     return AC_values
 
 

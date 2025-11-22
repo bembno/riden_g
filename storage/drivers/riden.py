@@ -248,13 +248,7 @@ class Riden:
     
     def set_i_set(self, i_set: float) -> float:
         self.i_set = round(i_set * self.i_multi)
-        print(f"[DEBUG] set_i_set({i_set}) → writing {self.i_set} raw")
-        start = time.time()
-
         result = self.write(R.I_SET, int(self.i_set))
-
-        duration = time.time() - start
-        print(f"[DEBUG] set_i_set done in {duration:.3f}s, result={result}")
         return result
 
 
