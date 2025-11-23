@@ -2,6 +2,7 @@ from lib.P1uitlezen import Meter
 from lib.batclant import Batclant
 import time
 from lib.PIDController import PIDController
+from lib.P1Storage import P1Storage
 import os
 import csv
 import pandas as pd
@@ -24,6 +25,12 @@ BRIGHT_MAGENTA = "\033[95m"
 BRIGHT_CYAN = "\033[96m"
 BRIGHT_WHITE = "\033[97m"
 
+p1 = P1Storage(
+    host="localhost",
+    user="admin",
+    password="aaa",
+    database="energy"
+)
 
 file_name="/home/pi/Desktop/prog/riden/data_log.csv"
 set_v_set_initial=57.0
@@ -68,11 +75,12 @@ def get_all_P1_to_df():
         meter.connect()  # connect once
         parsed_data = meter.read_telegram()  # read full telegram
         df = meter.to_dataframe(parsed_data)
+        #print (df)
         last_df = df
         return df
     except Exception as e:
         print(f"Error reading DSMR meter: {e}")
-        last_df = pd.DataFrame()  # <- important
+        last_df = pd.DataFrame()  # fallback empty
         return last_df
 
 def get_listed_obis_values( df, obis_list):
@@ -97,6 +105,7 @@ def get_listed_obis_values( df, obis_list):
     return values
 
 def get_AC_instantenious(obis_codes=None):
+    
     if obis_codes is None:
         obis_codes = [
             '1-0:1:.7.0',   # total import (or phase-independent)
@@ -110,7 +119,10 @@ def get_AC_instantenious(obis_codes=None):
         ]
     df = get_all_P1_to_df()
     AC_values = get_listed_obis_values(df, obis_codes)
-    
+
+    # Store to MariaDB
+    p1.store(df)
+    #p1.close()
     return AC_values
 
 
@@ -194,6 +206,20 @@ def print_status_line(
     add("V", v_out, fmt="{:.1f}")
 
     print(" ".join(parts))
+
+    p1.log_store(
+        import_p=import_p,
+        export_p=export_p,
+        power_diff=power_diff,
+        pid_power=pid_power,
+        L1=L1,
+        L2=L2,
+        L3=L3,
+        war_power=war_power,
+        rid_P_out=rid_P_out,
+        current=current,
+        v_out=v_out
+    )
 
 
 
