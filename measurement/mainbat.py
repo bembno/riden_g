@@ -221,86 +221,207 @@ def print_status_line(
         v_out=v_out
     )
 
-
-
 def main_loop():
-    deadband=0.02  # kW
-    rid_P_out=0.0
-    current=0.0
-    v_out=0.0
-    #storage.safe_set_value("pindriver", "connect", None)
-    #storage.safe_set_value("pindriver", "disconnect", None)
+    deadband = 0.02  # kW
+    rid_P_out = 0.0
+    current = 0.0
+    v_out = 0.0
+
     initialize_values()
+
     while True:
         try:
             vals = get_AC_instantenious()
-            import_p, export_p, L1, L2, L3 = (vals + [None]*5)[:5]
+            import_p, export_p, L1, L2, L3 = (vals + [None]*8)[:5]
 
-            #export_p=export_p+1.0
+            # If P1 invalid, show message and retry
             if None in [import_p, export_p]:
                 print(f"{RED}Invalid P1 data, retrying...{RESET}")
                 time.sleep(1.0)
                 continue
-            #calcualte power difference
+
+            # calculate power difference and PID
             power_diff = (import_p or 0.0) - (export_p or 0.0)
-            #pid control
             pid_power = pid.adjustPower(power_diff)
 
-            #set inverter power in watts
-            inv_power=round(pid_power*1000)
-            if inv_power < 0:
-                    inv_power=0
-
-            #when stable do not change power setpoints
-            if -deadband <= power_diff <= deadband:
-                print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff, pid_power=pid_power, L1=L1, L2=L2, L3=L3,war_power=inv_power)
+            # guard: if pid.adjustPower failed for some reason
+            if pid_power is None:
+                print(f"{YELLOW}PID returned None, skipping device calls this cycle{RESET}")
+                # still print P1 status so you see meter
+                print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff,
+                                  pid_power=0.0, L1=L1, L2=L2, L3=L3,
+                                  war_power=0, rid_P_out=rid_P_out, current=current, v_out=v_out)
                 time.sleep(0.5)
-                
-            #set power to inverter
-            if  pid_power >= 0:
-                storage.safe_set_value("inverter", "set_power", inv_power)
-                print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff, pid_power=pid_power, L1=L1, L2=L2, L3=L3,
-                                  war_power=inv_power)
-                current=0.0
-                throttled_set_riden("set_i_set", current)
-                #storage.safe_set_value("pindriver", "connect", None)
-                storage.safe_set_value("pindriver", "disconnect", None)
-            elif pid_power < 0:
-                inv_power=0
-                storage.safe_set_value("pindriver", "connect", None)
-                storage.safe_set_value("inverter", "set_power", inv_power)
-                storage.safe_set_value("riden", "set_output", True)
+                continue
 
-                v_out = storage.safe_get_value("riden", "get_v_out")
-                current=PtoI(pid_power,v_out )
+            # compute inverter power (watts) and clamp min 0
+            inv_power = max(0, round(pid_power * 1000))
 
-                #rid_P_out=storage.safe_get_value("riden", "get_p_out")/1000
-                p = storage.safe_get_value("riden", "get_p_out")
-                rid_P_out = p/1000 if p not in (None, "") else 0.0   
+            # ALWAYS print P1 / PID status first so you see meter readings even on device failures
+            print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff,
+                              pid_power=pid_power, L1=L1, L2=L2, L3=L3, war_power=inv_power,
+                              rid_P_out=rid_P_out, current=current, v_out=v_out)
 
-                #storage.safe_set_value("riden", "set_i_set", current)
-                throttled_set_riden("set_i_set", current)
-                #print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} get_V_out:  {v_out:.2f} V")
-                print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff, pid_power=pid_power, L1=L1, L2=L2, L3=L3,
-                       rid_P_out=rid_P_out, current=current, v_out=v_out)
-                
+            # ---------- device interactions isolated in their own try/except blocks ----------
+            if pid_power >= 0:
+                # set inverter; handle failure without killing the whole loop
+                try:
+                    res = storage.safe_set_value("inverter", "set_power", inv_power)
+                    if res is None:
+                        print(f"{YELLOW}Warning: inverter.set_power returned None{RESET}")
+                except Exception as e:
+                    print(f"{RED}Warning: Failed to set inverter.set_power: {e}{RESET}")
 
-            #log data to file
-            # with open(file_name, "a") as f:
-            #     f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{import_p:.3f},{export_p:.3f},{power_diff:.3f},{pid_power:.3f},{L1:.3f},{L2:.3f},{L3:.3f}\n")
+                # keep riden idle
+                current = 0.0
+                try:
+                    throttled_set_riden("set_i_set", current)
+                except Exception as e:
+                    print(f"{YELLOW}Warning: throttled_set_riden failed: {e}{RESET}")
 
+                try:
+                    storage.safe_set_value("pindriver", "disconnect", None)
+                except Exception as e:
+                    print(f"{YELLOW}Warning: pindriver.disconnect failed: {e}{RESET}")
+
+            else:  # pid_power < 0 -> charge with Riden
+                inv_power = 0
+                try:
+                    storage.safe_set_value("pindriver", "connect", None)
+                except Exception as e:
+                    print(f"{YELLOW}Warning: pindriver.connect failed: {e}{RESET}")
+
+                try:
+                    storage.safe_set_value("inverter", "set_power", inv_power)
+                except Exception as e:
+                    print(f"{YELLOW}Warning: inverter.set_power (0) failed: {e}{RESET}")
+
+                try:
+                    storage.safe_set_value("riden", "set_output", True)
+                except Exception as e:
+                    print(f"{YELLOW}Warning: riden.set_output failed: {e}{RESET}")
+
+                # read v_out safely
+                try:
+                    v_out_val = storage.safe_get_value("riden", "get_v_out")
+                    v_out = v_out_val if v_out_val not in (None, "") else v_out
+                except Exception as e:
+                    print(f"{YELLOW}Warning: riden.get_v_out failed: {e}{RESET}")
+
+                # compute current (guard if v_out is None or zero)
+                try:
+                    v_for_calc = v_out if (v_out not in (None, 0)) else set_v_set_initial
+                    current = PtoI(pid_power, v_for_calc)
+                except Exception as e:
+                    print(f"{YELLOW}Warning: PtoI failed: {e}{RESET}")
+                    current = 0.0
+
+                # read actual Riden power safely
+                try:
+                    p = storage.safe_get_value("riden", "get_p_out")
+                    rid_P_out = p / 1000 if p not in (None, "") else 0.0
+                except Exception as e:
+                    print(f"{YELLOW}Warning: riden.get_p_out failed: {e}{RESET}")
+                    rid_P_out = 0.0
+
+                try:
+                    throttled_set_riden("set_i_set", current)
+                except Exception as e:
+                    print(f"{YELLOW}Warning: throttled_set_riden failed: {e}{RESET}")
+
+                # print again the riden-specific status (optional; already printed above)
+                print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff,
+                                  pid_power=pid_power, L1=L1, L2=L2, L3=L3,
+                                  rid_P_out=rid_P_out, current=current, v_out=v_out)
+
+            # normal sleep interval at end of loop
             time.sleep(0.5)
 
         except Exception as e:
+            # Narrow the except so it doesn't eat device-specific warnings above.
             print(f"{RED}Error in main loop: {e}{RESET}")
-            # try:
-            #     storage.safe_set_value("inverter", "set_power", 0)
-            #     storage.safe_set_value("riden", "set_i_set", 0.0)
-            # except Exception as e2:
-            #     print(f"{RED}Safety mode failed: {e2}{RESET}")
-            #     storage._restart_mqtt()
-            time.sleep(3)  # cooldown before retry
-            #continue
+            # Give devices time to recover, but do NOT skip printing P1 next cycle.
+            time.sleep(3)
+
+
+# def main_loop():
+#     deadband=0.02  # kW
+#     rid_P_out=0.0
+#     current=0.0
+#     v_out=0.0
+#     #storage.safe_set_value("pindriver", "connect", None)
+#     #storage.safe_set_value("pindriver", "disconnect", None)
+#     initialize_values()
+#     while True:
+#         try:
+#             vals = get_AC_instantenious()
+#             import_p, export_p, L1, L2, L3 = (vals + [None]*5)[:5]
+
+#             #export_p=export_p+1.0
+#             if None in [import_p, export_p]:
+#                 print(f"{RED}Invalid P1 data, retrying...{RESET}")
+#                 time.sleep(1.0)
+#                 continue
+#             #calcualte power difference
+#             power_diff = (import_p or 0.0) - (export_p or 0.0)
+#             #pid control
+#             pid_power = pid.adjustPower(power_diff)
+
+#             #set inverter power in watts
+#             inv_power=round(pid_power*1000)
+#             if inv_power < 0:
+#                     inv_power=0
+
+#             #when stable do not change power setpoints
+#             if -deadband <= power_diff <= deadband:
+#                 print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff, pid_power=pid_power, L1=L1, L2=L2, L3=L3,war_power=inv_power)
+#                 time.sleep(0.5)
+                
+#             #set power to inverter
+#             if  pid_power >= 0:
+#                 storage.safe_set_value("inverter", "set_power", inv_power)
+#                 print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff, pid_power=pid_power, L1=L1, L2=L2, L3=L3,
+#                                   war_power=inv_power)
+#                 current=0.0
+#                 throttled_set_riden("set_i_set", current)
+#                 #storage.safe_set_value("pindriver", "connect", None)
+#                 storage.safe_set_value("pindriver", "disconnect", None)
+#             elif pid_power < 0:
+#                 inv_power=0
+#                 storage.safe_set_value("pindriver", "connect", None)
+#                 storage.safe_set_value("inverter", "set_power", inv_power)
+#                 storage.safe_set_value("riden", "set_output", True)
+
+#                 v_out = storage.safe_get_value("riden", "get_v_out")
+#                 current=PtoI(pid_power,v_out )
+
+#                 #rid_P_out=storage.safe_get_value("riden", "get_p_out")/1000
+#                 p = storage.safe_get_value("riden", "get_p_out")
+#                 rid_P_out = p/1000 if p not in (None, "") else 0.0   
+
+#                 #storage.safe_set_value("riden", "set_i_set", current)
+#                 throttled_set_riden("set_i_set", current)
+#                 #print(f"Setting current to: {BRIGHT_GREEN}{current:.2f}{RESET} get_V_out:  {v_out:.2f} V")
+#                 print_status_line(import_p=import_p, export_p=export_p, power_diff=power_diff, pid_power=pid_power, L1=L1, L2=L2, L3=L3,
+#                        rid_P_out=rid_P_out, current=current, v_out=v_out)
+                
+
+#             #log data to file
+#             # with open(file_name, "a") as f:
+#             #     f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{import_p:.3f},{export_p:.3f},{power_diff:.3f},{pid_power:.3f},{L1:.3f},{L2:.3f},{L3:.3f}\n")
+
+#             time.sleep(0.5)
+
+#         except Exception as e:
+#             print(f"{RED}Error in main loop: {e}{RESET}")
+#             # try:
+#             #     storage.safe_set_value("inverter", "set_power", 0)
+#             #     storage.safe_set_value("riden", "set_i_set", 0.0)
+#             # except Exception as e2:
+#             #     print(f"{RED}Safety mode failed: {e2}{RESET}")
+#             #     storage._restart_mqtt()
+#             time.sleep(3)  # cooldown before retry
+#             #continue
 
 try:
     main_loop()
