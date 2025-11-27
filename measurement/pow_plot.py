@@ -103,8 +103,8 @@ class EnergyLogger:
 if __name__ == "__main__":
     logger = EnergyLogger()
 
-    start = "2025-11-23 12:20:00"
-    end = "2025-11-23 23:59:59"
+    start = "2025-11-26 12:20:00"
+    end = "2025-11-27 23:59:59"
 
     # Example: plot multiple columns on the same plot
     logger.fetch_columns(["import_p", "export_p", "power_diff", "pid_power",
