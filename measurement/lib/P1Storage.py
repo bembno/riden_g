@@ -1,7 +1,7 @@
 import mysql.connector
 import time
 import pandas as pd
-
+import re
 
 class P1Storage:
     """
@@ -70,7 +70,9 @@ class P1Storage:
             value = rec["Value"]
 
             if obis in self.OBIS_TO_DB:
-                row[self.OBIS_TO_DB[obis]] = str(value)
+                # Remove letters and keep numbers, dot, minus sign
+                clean_value = re.sub(r"[^0-9\.-]", "", str(value))
+                row[self.OBIS_TO_DB[obis]] = clean_value
 
         return row
 
