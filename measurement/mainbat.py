@@ -254,7 +254,7 @@ def main_loop():
             L1 = L1 or 0.0
             L2 = L2 or 0.0
             L3 = L3 or 0.0
-
+            export_p=0.5+export_p
             # Compute PID
             power_diff = import_p - export_p
             pid_power = pid.adjustPower(power_diff) or 0.0
