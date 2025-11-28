@@ -6,6 +6,12 @@ from lib.P1Storage import P1Storage
 import os
 import csv
 import pandas as pd
+#from suntime import Sun
+import datetime
+from astral.sun import sun
+from astral import LocationInfo
+import pytz
+
 
 BRIGHT_PINK = "\033[95m"
 RESET = "\033[0m"
@@ -39,6 +45,8 @@ kp = 0.5
 ki = 0.09
 kd = 0.01
 
+DAY_OFfSET_CHARGE = 0.2 #kW
+
 setpoint=0.0  
 meter = Meter()
 storage = Batclant()
@@ -48,6 +56,7 @@ last_riden_set = 0
 MIN_RIDEN_INTERVAL = 0.15  # 150ms
 last_p1 = 0
 last_df = pd.DataFrame()
+
 
 # Ensure CSV file has headers
 if not os.path.exists(file_name):
@@ -63,6 +72,36 @@ if not os.path.exists(file_name):
             "L2_kW",
             "L3_kW"
         ])
+
+def is_daylight(city_name: str = "Eindhoven",
+                region: str = "Netherlands",
+                timezone: str = "Europe/Amsterdam",
+                date: datetime.date = None,
+                now: datetime.datetime = None) -> bool:
+    """
+    Returns True if the given 'now' timestamp is between sunrise and sunset
+    for the requested city/date. Otherwise returns False.
+    """
+
+    # auto date and time if not provided
+    if date is None:
+        date = datetime.date.today()
+
+    if now is None:
+        now = datetime.datetime.now(pytz.timezone(timezone))
+
+    # build location
+    location = LocationInfo(city_name, region, timezone, 51.4416, 5.4697)  # Eindhoven coords
+
+    # get sunrise/sunset times
+    s = sun(location.observer, date=date, tzinfo=pytz.timezone(timezone))
+    sunrise = s["sunrise"]
+    sunset = s["sunset"]
+
+    # return True/False
+    return sunrise <= now <= sunset
+
+
 def get_all_P1_to_df():
     try:
         global last_p1, last_df
@@ -83,25 +122,28 @@ def get_all_P1_to_df():
         last_df = pd.DataFrame()  # fallback empty
         return last_df
 
-def get_listed_obis_values( df, obis_list):
+def get_listed_obis_values(df, obis_list):
     if df is None or df.empty or "OBIS" not in df.columns:
-        return [None] * len(obis_list)
-    
+        return [0.0] * len(obis_list)  # always numeric
+
     values = []
     for obis in obis_list:
         row = df[df['OBIS'] == obis]
         if not row.empty:
             try:
-                values.append(float(row.iloc[0]['Value']))
+                val = float(row.iloc[0]['Value'])
+                values.append(val)
             except Exception:
-                values.append(None)
+                values.append(0.0)
         else:
-            values.append(None)
+            values.append(0.0)
+
+    # Safe subtraction
     if len(values) == 8:
-        values[2] = values[2] - values[5]  # L1 import - export
-        values[3] = values[3] - values[6]  # L2 import - export
-        values[4] = values[4] - values[7]  # L3
-    
+        values[2] = (values[2] or 0.0) - (values[5] or 0.0)  # L1 import - export
+        values[3] = (values[3] or 0.0) - (values[6] or 0.0)  # L2 import - export
+        values[4] = (values[4] or 0.0) - (values[7] or 0.0)  # L3
+
     return values
 
 def get_AC_instantenious(obis_codes=None):
@@ -231,15 +273,15 @@ def safe_call(func, *args, default=None, warn_color=YELLOW):
 
 def main_loop():
     deadband = 0.02  # kW
-    rid_P_out = 0.0
-    current = 0.0
     v_out = set_v_set_initial
 
     initialize_values()
 
     while True:
         try:
-            # Get AC values safely
+            # ---------------------
+            # Read AC values safely
+            # ---------------------
             vals = safe_call(get_AC_instantenious, default=[0.0]*8)
             if not vals or len(vals) < 5:
                 print(f"{RED}Invalid P1 data, retrying...{RESET}")
@@ -247,61 +289,80 @@ def main_loop():
                 continue
 
             import_p, export_p, L1, L2, L3 = (vals + [0.0]*8)[:5]
-
-            # Ensure numeric values
             import_p = import_p or 0.0
             export_p = export_p or 0.0
             L1 = L1 or 0.0
             L2 = L2 or 0.0
             L3 = L3 or 0.0
-            export_p=0.5+export_p
-            # Compute PID
+
+            # ---------------------
+            # Daylight adjustment
+            # ---------------------
+            try:
+                if is_daylight():
+                    export_p += DAY_OFfSET_CHARGE
+            except Exception as e:
+                print(f"{YELLOW}Warning: is_daylight check failed: {e}{RESET}")
+
+            # ---------------------
+            # PID calculation
+            # ---------------------
             power_diff = import_p - export_p
             pid_power = pid.adjustPower(power_diff) or 0.0
             inv_power = max(0, round(pid_power * 1000))
 
-            # Default values for Riden
+            # ---------------------
+            # Default device values
+            # ---------------------
             rid_P_out = 0.0
             current = 0.0
 
-            # Device interactions
+            # ---------------------
+            # Device control
+            # ---------------------
             if pid_power >= 0:
-                # Discharge via inverter, Riden idle
+                # Discharge via inverter
                 safe_call(storage.safe_set_value, "inverter", "set_power", inv_power)
                 safe_call(throttled_set_riden, "set_i_set", 0.0)
                 safe_call(storage.safe_set_value, "pindriver", "disconnect", None)
             else:
-                # Charge via Riden, inverter off
+                # Charge via Riden
                 safe_call(storage.safe_set_value, "pindriver", "connect", None)
                 safe_call(storage.safe_set_value, "inverter", "set_power", 0)
                 safe_call(storage.safe_set_value, "riden", "set_output", True)
 
-                # Safely read Riden values
                 v_out_val = safe_call(storage.safe_get_value, "riden", "get_v_out", default=v_out)
                 v_out = v_out_val if v_out_val not in (None, "") else v_out
                 v_for_calc = v_out if v_out not in (None, 0) else set_v_set_initial
-                current = safe_call(PtoI, pid_power, v_for_calc, default=0.0)
 
+                current = safe_call(PtoI, pid_power, v_for_calc, default=0.0)
                 p = safe_call(storage.safe_get_value, "riden", "get_p_out", default=0.0)
                 rid_P_out = (p or 0.0) / 1000.0
 
                 safe_call(throttled_set_riden, "set_i_set", current)
 
-            # Single status print
+            # ---------------------
+            # Print & log consistent line
+            # ---------------------
             print_status_line(
-                import_p=import_p, export_p=export_p, power_diff=power_diff,
-                pid_power=pid_power, L1=L1, L2=L2, L3=L3,
-                war_power=inv_power, rid_P_out=rid_P_out,
-                current=current, v_out=v_out
+                import_p=import_p,
+                export_p=export_p,
+                power_diff=power_diff,
+                pid_power=pid_power,
+                L1=L1,
+                L2=L2,
+                L3=L3,
+                war_power=inv_power,
+                rid_P_out=rid_P_out,
+                current=current,
+                v_out=v_out
             )
 
             time.sleep(0.5)
 
         except Exception as e:
-            # Catch-all safety for loop
             print(f"{YELLOW}Warning: main loop iteration failed: {e}{RESET}")
             time.sleep(1.0)
-
 
 
 
