@@ -97,9 +97,10 @@ def is_daylight(city_name: str = "Eindhoven",
     s = sun(location.observer, date=date, tzinfo=pytz.timezone(timezone))
     sunrise = s["sunrise"]
     sunset = s["sunset"]
-
+    value_out=sunrise <= now <= sunset
+    #print (f"Sunrise: {sunrise}, Sunset: {sunset}, Now: {now}, Daylight: {value_out}")
     # return True/False
-    return sunrise <= now <= sunset
+    return value_out
 
 
 def get_all_P1_to_df():
