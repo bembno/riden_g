@@ -6,14 +6,11 @@ from lib.P1Storage import P1Storage
 import os
 import csv
 import pandas as pd
-#from suntime import Sun
 import datetime
 from astral.sun import sun
 from astral import LocationInfo
 import pytz
 import threading
-import subprocess
-
 
 
 BRIGHT_PINK = "\033[95m"
@@ -48,7 +45,7 @@ kp = 0.5
 ki = 0.09
 kd = 0.01
 
-DAY_OFfSET_CHARGE = 1+0.2 #kW
+DAY_OFfSET_CHARGE = 0.2 #kW
 
 setpoint=0.0  
 meter = Meter()
@@ -293,11 +290,10 @@ def watchdog_thread():
 
 def main_loop():
     global last_valid_p1_time 
-    deadband = 0.02  # kW
     v_out = set_v_set_initial
 
     initialize_values()
-    last_vals = None
+  
 
     while True:
         try:
@@ -310,11 +306,6 @@ def main_loop():
             # Watchdog refresh: valid data received
             with watchdog_lock:
                 last_valid_p1_time = time.time()
-            last_vals = vals
-            
-
-            
-
 
             if not vals or len(vals) < 5:
                 print(f"{RED}Invalid P1 data, retrying...{RESET}")
@@ -412,7 +403,6 @@ finally:
     try:
         storage.safe_set_value("inverter", "set_power", 0)
         throttled_set_riden("set_i_set",  0.0)
-        #storage.safe_set_value("riden", "set_i_set", 0.0)
         storage.safe_set_value("pindriver", "disconnect", None)
 
     except Exception as e:
