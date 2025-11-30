@@ -11,6 +11,9 @@ import datetime
 from astral.sun import sun
 from astral import LocationInfo
 import pytz
+import threading
+import subprocess
+
 
 
 BRIGHT_PINK = "\033[95m"
@@ -45,7 +48,7 @@ kp = 0.5
 ki = 0.09
 kd = 0.01
 
-DAY_OFfSET_CHARGE = 0.2 #kW
+DAY_OFfSET_CHARGE = 1+0.2 #kW
 
 setpoint=0.0  
 meter = Meter()
@@ -57,6 +60,8 @@ MIN_RIDEN_INTERVAL = 0.15  # 150ms
 last_p1 = 0
 last_df = pd.DataFrame()
 
+last_valid_p1_time = time.time()
+watchdog_lock = threading.Lock()   # module-level, near last_valid_p1_time
 
 # Ensure CSV file has headers
 if not os.path.exists(file_name):
@@ -271,19 +276,46 @@ def safe_call(func, *args, default=None, warn_color=YELLOW):
     except Exception as e:
         print(f"{warn_color}Warning: {func.__name__} failed: {e}{RESET}")
         return default
+    
+def watchdog_thread():
+    global last_valid_p1_time
+    TIMEOUT = 180   # 3 minutes
+
+    while True:
+        now = time.time()
+        if now - last_valid_p1_time > TIMEOUT:
+            print(RED +f"t:{time.strftime('%H:%M:%S')}" " WATCHDOG: No valid P1 data for >3 minutes. Rebooting RPi..." + RESET)
+            time.sleep(1)
+            os.system("sudo reboot")
+            return
+        time.sleep(5)    
+
 
 def main_loop():
+    global last_valid_p1_time 
     deadband = 0.02  # kW
     v_out = set_v_set_initial
 
     initialize_values()
+    last_vals = None
 
     while True:
         try:
             # ---------------------
             # Read AC values safely
             # ---------------------
+            
             vals = safe_call(get_AC_instantenious, default=[0.0]*8)
+
+            # Watchdog refresh: valid data received
+            with watchdog_lock:
+                last_valid_p1_time = time.time()
+            last_vals = vals
+            
+
+            
+
+
             if not vals or len(vals) < 5:
                 print(f"{RED}Invalid P1 data, retrying...{RESET}")
                 time.sleep(1.0)
@@ -366,6 +398,10 @@ def main_loop():
             time.sleep(1.0)
 
 
+
+# Start watchdog thread
+wd = threading.Thread(target=watchdog_thread, daemon=True)
+wd.start()
 
 try:
     main_loop()
