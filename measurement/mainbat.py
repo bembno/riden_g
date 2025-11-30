@@ -277,15 +277,30 @@ def safe_call(func, *args, default=None, warn_color=YELLOW):
 def watchdog_thread():
     global last_valid_p1_time
     TIMEOUT = 180   # 3 minutes
+    HALF_TIMEOUT = TIMEOUT / 2
+    half_warned = False  # Track if half-time warning has been printed
 
     while True:
         now = time.time()
-        if now - last_valid_p1_time > TIMEOUT:
-            print(RED +f"t:{time.strftime('%H:%M:%S')}" " WATCHDOG: No valid P1 data for >3 minutes. Rebooting RPi..." + RESET)
+        elapsed = now - last_valid_p1_time
+
+        # Half-time warning
+        if elapsed > HALF_TIMEOUT and not half_warned:
+            print(RED + f"t:{time.strftime('%H:%M:%S')} WATCHDOG WARNING: No valid P1 data for >{HALF_TIMEOUT:.0f} seconds..." + RESET)
+            half_warned = True
+
+        # Full timeout -> reboot
+        if elapsed > TIMEOUT:
+            print(RED + f"t:{time.strftime('%H:%M:%S')} WATCHDOG: No valid P1 data for >{TIMEOUT} seconds. Rebooting RPi..." + RESET)
             time.sleep(1)
             os.system("sudo reboot")
             return
-        time.sleep(5)    
+
+        # Reset half-time warning if new valid P1 data arrives
+        if elapsed <= HALF_TIMEOUT:
+            half_warned = False
+
+        time.sleep(5) 
 
 
 def main_loop():
