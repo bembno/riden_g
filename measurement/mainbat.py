@@ -322,7 +322,7 @@ def main_loop():
                     or len(vals) < 8
                     or vals[0] == 0  # <-- missing import power = bad telegram
                 ):
-                    print(f"{RED}Warning: bad or missing P1 data — keeping previous state{RESET}")
+                    print(f"{YELLOW}Warning: bad or missing P1 data{RESET}")
                     time.sleep(1.0)
                     continue
             # Watchdog refresh: valid data received

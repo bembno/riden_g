@@ -76,7 +76,7 @@ class Batclant:
     # ----------------------------
     # Generic send
     # ----------------------------
-    def _send_command(self, device: str, function: str, value=None, timeout=2.0, retries=3):
+    def _send_command(self, device: str, function: str, value=None, timeout=2.0, retries=1):
         """
         Send a command to a device via MQTT and wait for response.
         Avoids infinite loops and handles reconnects safely.
