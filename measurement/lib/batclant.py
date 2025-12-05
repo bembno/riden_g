@@ -44,17 +44,17 @@ class Batclant:
         except Exception as e:
             self.last_response = {"status": "error", "message": f"Invalid JSON: {e}"}
     
-    def _on_disconnect(self, client, userdata, rc):
-        self.connected = False
-        print(f"MQTT disconnected (code {rc}), attempting reconnect...")
-        while not self.connected:
-            try:
-                #self.client.reconnect()
-                self._connect()
-                time.sleep(1)
-            except Exception as e:
-                print(f"Reconnect failed: {e}, retrying in 5s...")
-                time.sleep(5)
+    # def _on_disconnect(self, client, userdata, rc):
+    #     self.connected = False
+    #     print(f"MQTT disconnected (code {rc}), attempting reconnect...")
+    #     while not self.connected:
+    #         try:
+    #             #self.client.reconnect()
+    #             self._connect()
+    #             time.sleep(1)
+    #         except Exception as e:
+    #             print(f"Reconnect failed: {e}, retrying in 5s...")
+    #             time.sleep(5)
 
     def _restart_mqtt(self):
         try:
@@ -76,39 +76,67 @@ class Batclant:
     # ----------------------------
     # Generic send
     # ----------------------------
-    def _send_command(self, device: str, function: str, value=None, timeout=2.0, retries=1):
-        """Internal method to send command and wait for response with retry."""
-        for attempt in range(retries):
+    def _send_command(self, device: str, function: str, value=None, timeout=2.0, retries=3):
+        """
+        Send a command to a device via MQTT and wait for response.
+        Avoids infinite loops and handles reconnects safely.
+        """
+        cmd = {"device": device, "action": function}
+        if value is not None:
+            cmd["value"] = value
+
+        for attempt in range(1, retries + 1):
             self.last_response = None
-            cmd = {"device": device, "action": function}
-            if value is not None:
-                cmd["value"] = value
 
+            # Ensure connection
             if not self.connected:
-                print("MQTT not connected, waiting to reconnect...")
-                while not self.connected:
-                    time.sleep(0.1)
-            self.client.publish(self.topic_cmd, json.dumps(cmd))
-            
+                print(f"MQTT not connected, attempt {attempt}/{retries} reconnecting...")
+                try:
+                    self.client.reconnect()
+                except Exception as e:
+                    print(f"Reconnect failed: {e}, will retry in next attempt")
+                    time.sleep(1)
+                    continue  # retry next attempt
 
+            # Only publish if connected
+            if self.connected:
+                try:
+                    self.client.publish(self.topic_cmd, json.dumps(cmd))
+                except Exception as e:
+                    print(f"Failed to publish command: {e}, attempt {attempt}/{retries}")
+                    time.sleep(1)
+                    continue
+
+            # Wait for response with timeout
             start_time = time.time()
-            while self.last_response is None:
-                if time.time() - start_time > timeout:
-                    break
+            while self.last_response is None and (time.time() - start_time) < timeout:
                 time.sleep(0.05)
 
             if self.last_response is not None:
                 return self.last_response
 
-            print(f"Timeout waiting for response from {device}.{function}, attempt {attempt+1}/{retries}")
-            time.sleep(2)
-            # Try reconnecting to MQTT broker before next retry
-            try:
-                self.client.reconnect()
-            except Exception:
-                print("Reconnecting MQTT client failed, will retry...")
+            print(f"Timeout waiting for response from {device}.{function}, attempt {attempt}/{retries}")
+            time.sleep(1)  # short backoff before next retry
 
-        return {"status": "error", "message": "Timeout waiting for response after retries"}
+        # All retries failed
+        return {"status": "error", "message": f"Timeout waiting for response from {device}.{function} after {retries} attempts"}
+
+    def _on_disconnect(self, client, userdata, rc):
+        self.connected = False
+        print(f"MQTT disconnected (code {rc}), will attempt reconnect in background...")
+
+        # reconnect in background thread
+        def try_reconnect():
+            while not self.connected:
+                try:
+                    self.client.reconnect()
+                except Exception as e:
+                    print(f"Reconnect failed: {e}, retrying in 5s")
+                    time.sleep(5)
+                time.sleep(1)
+
+        import threading
+        threading.Thread(target=try_reconnect, daemon=True).start()
 
 
 

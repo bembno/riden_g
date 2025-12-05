@@ -41,9 +41,9 @@ p1 = P1Storage(
 file_name="/home/pi/Desktop/prog/riden/data_log.csv"
 set_v_set_initial=57.0
 
-kp = 0.5
+kp = 0.2
 ki = 0.09
-kd = 0.01
+kd = 0.009
 
 DAY_OFfSET_CHARGE = 0.2 #kW
 
@@ -315,9 +315,16 @@ def main_loop():
             # ---------------------
             # Read AC values safely
             # ---------------------
-            
-            vals = safe_call(get_AC_instantenious, default=[0.0]*8)
-
+            vals =get_AC_instantenious()
+           
+            if (  vals is None
+                    or not isinstance(vals, list)
+                    or len(vals) < 8
+                    or vals[0] == 0  # <-- missing import power = bad telegram
+                ):
+                    print(f"{RED}Warning: bad or missing P1 data — keeping previous state{RESET}")
+                    time.sleep(1.0)
+                    continue
             # Watchdog refresh: valid data received
             with watchdog_lock:
                 last_valid_p1_time = time.time()
