@@ -31,8 +31,9 @@ BRIGHT_MAGENTA = "\033[95m"
 BRIGHT_CYAN = "\033[96m"
 BRIGHT_WHITE = "\033[97m"
 
-# Initialize P1Storage with error handling
+# Initialize P1Storage with error handling (non-blocking)
 p1 = None
+db_available = False
 try:
     p1 = P1Storage(
         host="192.168.2.33",
@@ -41,10 +42,17 @@ try:
         password="aaa",
         database="energy"
     )
-    print("MySQL connection established successfully")
+    # Check if connection actually succeeded
+    if p1.connection is not None and p1.cursor is not None:
+        db_available = True
+        print("MySQL connection established successfully")
+    else:
+        print(f"{BRIGHT_YELLOW}WARNING: MySQL server not available at startup{RESET}")
+        print(f"{BRIGHT_YELLOW}Program will continue with measurements only (no database logging){RESET}")
 except Exception as e:
-    print(f"{BRIGHT_YELLOW}WARNING: Failed to connect to MySQL database: {e}{RESET}")
-    print(f"{BRIGHT_YELLOW}Program will continue, but database logging will be disabled{RESET}")
+    print(f"{BRIGHT_YELLOW}WARNING: Failed to initialize database: {e}{RESET}")
+    print(f"{BRIGHT_YELLOW}Program will continue with measurements only{RESET}")
+    p1 = None
 
 file_name="/home/pi/Desktop/prog/riden/data_log.csv"
 set_v_set_initial=57.0
@@ -177,8 +185,9 @@ def get_AC_instantenious(obis_codes=None):
     if p1 is not None:
         try:
             p1.store(df)
-        except Exception as e:
-            print(f"{YELLOW}Warning: Failed to store P1 data to database: {e}{RESET}")
+        except Exception:
+            # Silently fail - connection state is logged in P1Storage
+            pass
     #p1.close()
     return AC_values
 
@@ -280,8 +289,9 @@ def print_status_line(
                 current=current,
                 v_out=v_out
             )
-        except Exception as e:
-            print(f"{YELLOW}Warning: Failed to log data to database: {e}{RESET}")
+        except Exception:
+            # Silently fail - connection state is logged in P1Storage
+            pass
 
 def safe_call(func, *args, default=None, warn_color=YELLOW):
     """Call func safely with try/except, return default on failure."""

@@ -49,14 +49,74 @@ class P1Storage:
 
     def __init__(self, host, user, password, database, table="p1_data"):
         self.table = table
-        self.connection = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=database,
-            autocommit=True
-        )
-        self.cursor = self.connection.cursor()
+        self.host = host
+        self.user = user
+        self.password = password
+        self.database = database
+        self.connection = None
+        self.cursor = None
+        self.last_reconnect_attempt = 0
+        self.reconnect_cooldown = 5  # seconds between reconnect attempts
+        self.connection_failed_logged = False  # Track if error was logged
+        self._connect()
+    
+    def _connect(self):
+        """Establish connection to MySQL server."""
+        try:
+            self.connection = mysql.connector.connect(
+                host=self.host,
+                user=self.user,
+                password=self.password,
+                database=self.database,
+                autocommit=True,
+                connection_timeout=3,  # 3 second timeout for initial connection
+                auth_plugin='mysql_native_password'
+            )
+            self.cursor = self.connection.cursor()
+            return True
+        except Exception as e:
+            print(f"Failed to connect to MySQL: {e}")
+            self.connection = None
+            self.cursor = None
+            return False
+    
+    def _ensure_connected(self):
+        """Check if connection is alive, reconnect if needed (with cooldown)."""
+        if self.connection is None or self.cursor is None:
+            # Only attempt reconnect if cooldown has passed
+            now = time.time()
+            if now - self.last_reconnect_attempt > self.reconnect_cooldown:
+                self.last_reconnect_attempt = now
+                return self._connect()
+            return False
+        
+        try:
+            # Test connection with a ping (timeout after 2 seconds)
+            self.connection.ping(reconnect=False)
+            self.connection_failed_logged = False  # Reset error logging on success
+            return True
+        except Exception as e:
+            # Log error only once
+            if not self.connection_failed_logged:
+                print(f"Connection lost: {e}")
+                self.connection_failed_logged = True
+            
+            # Force disconnect and reconnect attempt
+            try:
+                if self.connection is not None:
+                    self.connection.close()
+            except:
+                pass
+            self.connection = None
+            self.cursor = None
+            
+            # Only attempt reconnect if cooldown has passed
+            now = time.time()
+            if now - self.last_reconnect_attempt > self.reconnect_cooldown:
+                self.last_reconnect_attempt = now
+                self._connect()
+            
+            return False
 
     def df_to_dict(self, df: pd.DataFrame) -> dict:
         """
@@ -80,6 +140,11 @@ class P1Storage:
         """
         Insert dataframe values into MariaDB.
         """
+        
+        # Ensure connection is alive
+        if not self._ensure_connected():
+            # Silently fail without printing - connection state is already logged
+            return False
 
         start = time.time()
 
@@ -93,7 +158,11 @@ class P1Storage:
         try:
             self.cursor.execute(sql, list(data_dict.values()))
         except Exception as e:
-            print(f"DB Insert ERROR: {e}")
+            # Only log unexpected errors, not connection issues
+            if "2013" not in str(e) and "2006" not in str(e):
+                print(f"DB Insert ERROR: {e}")
+            # Try to reconnect on error
+            self._ensure_connected()
             return False
 
         elapsed = (time.time() - start) * 1000
@@ -109,6 +178,11 @@ class P1Storage:
         Stores real-time inverter/meter status into t_logs table.
         Values equal to zero are stored as NULL.
         """
+        
+        # Ensure connection is alive
+        if not self._ensure_connected():
+            # Silently fail without printing - connection state is already logged
+            return False
 
         # Build dict
         fields = {
@@ -138,12 +212,21 @@ class P1Storage:
         try:
             self.cursor.execute(sql, list(row.values()))
         except Exception as e:
-            print(f"DB Insert ERROR (energy): {e}")
+            # Only log unexpected errors, not connection issues
+            if "2013" not in str(e) and "2006" not in str(e):
+                print(f"DB Insert ERROR (energy): {e}")
+            # Try to reconnect on error
+            self._ensure_connected()
             return False
 
         return True
 
-
     def close(self):
-        self.cursor.close()
-        self.connection.close()
+        """Close database connection gracefully."""
+        try:
+            if self.cursor is not None:
+                self.cursor.close()
+            if self.connection is not None:
+                self.connection.close()
+        except Exception as e:
+            print(f"Error closing database connection: {e}")
