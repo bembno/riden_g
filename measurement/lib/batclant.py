@@ -44,18 +44,6 @@ class Batclant:
         except Exception as e:
             self.last_response = {"status": "error", "message": f"Invalid JSON: {e}"}
     
-    # def _on_disconnect(self, client, userdata, rc):
-    #     self.connected = False
-    #     print(f"MQTT disconnected (code {rc}), attempting reconnect...")
-    #     while not self.connected:
-    #         try:
-    #             #self.client.reconnect()
-    #             self._connect()
-    #             time.sleep(1)
-    #         except Exception as e:
-    #             print(f"Reconnect failed: {e}, retrying in 5s...")
-    #             time.sleep(5)
-
     def _restart_mqtt(self):
         try:
             print("Restarting MQTT client loop...")

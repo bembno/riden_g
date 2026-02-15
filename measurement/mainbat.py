@@ -31,12 +31,20 @@ BRIGHT_MAGENTA = "\033[95m"
 BRIGHT_CYAN = "\033[96m"
 BRIGHT_WHITE = "\033[97m"
 
-p1 = P1Storage(
-    host="localhost",
-    user="admin",
-    password="aaa",
-    database="energy"
-)
+# Initialize P1Storage with error handling
+p1 = None
+try:
+    p1 = P1Storage(
+        host="192.168.2.33",
+        #host="localhost",
+        user="admin",
+        password="aaa",
+        database="energy"
+    )
+    print("MySQL connection established successfully")
+except Exception as e:
+    print(f"{BRIGHT_YELLOW}WARNING: Failed to connect to MySQL database: {e}{RESET}")
+    print(f"{BRIGHT_YELLOW}Program will continue, but database logging will be disabled{RESET}")
 
 file_name="/home/pi/Desktop/prog/riden/data_log.csv"
 set_v_set_initial=57.0
@@ -165,8 +173,12 @@ def get_AC_instantenious(obis_codes=None):
     df = get_all_P1_to_df()
     AC_values = get_listed_obis_values(df, obis_codes)
 
-    # Store to MariaDB
-    p1.store(df)
+    # Store to MariaDB (only if connection is available)
+    if p1 is not None:
+        try:
+            p1.store(df)
+        except Exception as e:
+            print(f"{YELLOW}Warning: Failed to store P1 data to database: {e}{RESET}")
     #p1.close()
     return AC_values
 
@@ -252,19 +264,24 @@ def print_status_line(
 
     print(" ".join(parts))
 
-    p1.log_store(
-        import_p=import_p,
-        export_p=export_p,
-        power_diff=power_diff,
-        pid_power=pid_power,
-        L1=L1,
-        L2=L2,
-        L3=L3,
-        war_power=war_power,
-        rid_P_out=rid_P_out,
-        current=current,
-        v_out=v_out
-    )
+    # Log to database only if connection is available
+    if p1 is not None:
+        try:
+            p1.log_store(
+                import_p=import_p,
+                export_p=export_p,
+                power_diff=power_diff,
+                pid_power=pid_power,
+                L1=L1,
+                L2=L2,
+                L3=L3,
+                war_power=war_power,
+                rid_P_out=rid_P_out,
+                current=current,
+                v_out=v_out
+            )
+        except Exception as e:
+            print(f"{YELLOW}Warning: Failed to log data to database: {e}{RESET}")
 
 def safe_call(func, *args, default=None, warn_color=YELLOW):
     """Call func safely with try/except, return default on failure."""
@@ -426,7 +443,14 @@ finally:
         storage.safe_set_value("inverter", "set_power", 0)
         throttled_set_riden("set_i_set",  0.0)
         storage.safe_set_value("pindriver", "disconnect", None)
-
     except Exception as e:
         print(f"Error setting safe values: {e}")
+    
+    # Close database connection if it exists
+    if p1 is not None:
+        try:
+            p1.close()
+        except Exception as e:
+            print(f"Error closing database connection: {e}")
+    
     storage.close()
