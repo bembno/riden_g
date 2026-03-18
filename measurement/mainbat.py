@@ -54,14 +54,13 @@ except Exception as e:
     print(f"{BRIGHT_YELLOW}Program will continue with measurements only{RESET}")
     p1 = None
 
-file_name="/home/pi/Desktop/prog/riden/data_log.csv"
-set_v_set_initial=57.0
 
+set_v_set_initial=57.2
 kp = 0.2
 ki = 0.09
 kd = 0.009
 
-DAY_OFfSET_CHARGE = 0.2 #kW
+DAY_OFfSET_CHARGE = 0.05 #kW
 
 setpoint=0.0  
 meter = Meter()
@@ -76,20 +75,6 @@ last_df = pd.DataFrame()
 last_valid_p1_time = time.time()
 watchdog_lock = threading.Lock()   # module-level, near last_valid_p1_time
 
-# Ensure CSV file has headers
-if not os.path.exists(file_name):
-    with open(file_name, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "timestamp",
-            "import_kW",
-            "export_kW",
-            "power_diff_kW",
-            "pid_power_kW",
-            "L1_kW",
-            "L2_kW",
-            "L3_kW"
-        ])
 
 def is_daylight(city_name: str = "Eindhoven",
                 region: str = "Netherlands",
@@ -347,7 +332,7 @@ def main_loop():
             if (  vals is None
                     or not isinstance(vals, list)
                     or len(vals) < 8
-                    or vals[0] == 0  # <-- missing import power = bad telegram
+                #    or vals[0] == 0  # <-- missing import power = bad telegram
                 ):
                     print(f"{YELLOW}Warning: bad or missing P1 data{RESET}")
                     time.sleep(1.0)
@@ -398,6 +383,7 @@ def main_loop():
                 safe_call(storage.safe_set_value, "inverter", "set_power", inv_power)
                 safe_call(throttled_set_riden, "set_i_set", 0.0)
                 safe_call(storage.safe_set_value, "pindriver", "disconnect", None)
+                
             else:
                 # Charge via Riden
                 safe_call(storage.safe_set_value, "pindriver", "connect", None)
