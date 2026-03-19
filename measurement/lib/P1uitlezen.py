@@ -3,11 +3,9 @@
 version = "1.0"
 import sys
 import serial
-import pandas as pd
 import re
 import time   # <--- Add this
 import threading
-from queue import Queue, Empty
 
 class Meter:
 
@@ -19,14 +17,13 @@ class Meter:
         self.last_good_data = []
         self.telegram_end = b'!'  # DSMR telegram ends with '!'
 
-        # Caching helper (avoid reading more than once per second)
-        self._last_read_time = 0.0
-        self._last_df = pd.DataFrame()
-
         # Thread-safe periodic read variables
+        # _recent_parsed_data stores the last parsed telegram (list of dicts)
+        # _recent_p1_data stores the latest 8 AC values for fast callers.
+        self._recent_parsed_data = []
         self._read_lock = threading.Lock()  # Protects shared data access
         self._recent_p1_data = []  # Shared storage for most recent AC values
-        self._periodic_read_running = False  # Control flag for periodic reading thread
+        self._stop_event = threading.Event()  # Thread-safe stop signal
         self._periodic_thread = None  # Reference to the periodic read thread
 
     def connect(self):
@@ -146,47 +143,23 @@ class Meter:
                     }
         return descriptions.get(obis_code, '')
     
-    def to_dataframe(self, parsed_data):
-        df = pd.DataFrame(parsed_data)
-        if not df.empty:
-            df['Description'] = df['OBIS'].apply(self.obis_description)
-        return df
-    
-    def get_all_P1_to_df(self):
-        try:
-            now = time.time()
-            if now - self._last_read_time < 1:  # DSMR sends once per second
-                return self._last_df     # reuse last telegram
-
-            self._last_read_time = now
-            self.connect()  # connect once
-            parsed_data = self.read_telegram()  # read full telegram
-            df = self.to_dataframe(parsed_data)
-            #print (df)
-            self._last_df = df
-            return df
-        except Exception as e:
-            print(f"Error reading DSMR meter: {e}")
-            self._last_df = pd.DataFrame()  # fallback empty
-            return self._last_df
-
-    def get_listed_obis_values(self, df, obis_list):
-        if df is None or df.empty or "OBIS" not in df.columns:
+    def get_listed_obis_values(self, parsed_data, obis_list):
+        """Extract a list of numeric values for the requested OBIS codes."""
+        if not parsed_data:
             return [0.0] * len(obis_list)  # always numeric
 
         values = []
         for obis in obis_list:
-            row = df[df['OBIS'] == obis]
-            if not row.empty:
+            record = next((r for r in parsed_data if r.get('OBIS') == obis), None)
+            if record is not None:
                 try:
-                    val = float(row.iloc[0]['Value'])
-                    values.append(val)
+                    values.append(float(record.get('Value', 0)))
                 except Exception:
                     values.append(0.0)
             else:
                 values.append(0.0)
 
-        # Safe subtraction
+        # Safe subtraction (import - export)
         if len(values) == 8:
             values[2] = (values[2] or 0.0) - (values[5] or 0.0)  # L1 import - export
             values[3] = (values[3] or 0.0) - (values[6] or 0.0)  # L2 import - export
@@ -194,32 +167,22 @@ class Meter:
 
         return values
 
-    def get_AC_instantenious(self, obis_codes=None):
-    
-        if obis_codes is None:
-            obis_codes = [
-                '1-0:1:.7.0',   # total import (or phase-independent)
-                '1-0:2:.7.0',   # total export (or phase-independent)
-                '1-0:21:.7.0',  # L1
-                '1-0:41:.7.0',  # L2  
-                '1-0:61:.7.0',  # L3
-                '1-0:22:.7.0',  # -L1
-                '1-0:42:.7.0',  # -L2  
-                '1-0:62:.7.0'   # -L3
-            ]
-        df = self.get_all_P1_to_df()
-        AC_values = self.get_listed_obis_values(df, obis_codes)
+    def get_recent_parsed(self):
+        """Return the most recent parsed telegram (list of dicts)."""
+        with self._read_lock:
+            return list(self._recent_parsed_data) if self._recent_parsed_data else []
 
-        return AC_values
+    def get_AC_instantenious(self, obis_codes=None):
+        """Get AC instantaneous values from cached data (no direct serial access)."""
+        return self.get_recentP1()
 
     def periodic_read(self):
         """Background thread: reads DSMR telegram continuously."""
-        while self._periodic_read_running:
+        while not self._stop_event.is_set():
             try:
                 parsed_data = self.read_telegram()
-                df = self.to_dataframe(parsed_data)
 
-                values = self.get_listed_obis_values(df, [
+                values = self.get_listed_obis_values(parsed_data, [
                     '1-0:1:.7.0',
                     '1-0:2:.7.0',
                     '1-0:21:.7.0',
@@ -232,28 +195,29 @@ class Meter:
 
                 with self._read_lock:
                     self._recent_p1_data = values
+                    self._recent_parsed_data = parsed_data
 
             except Exception as e:
                 print(f"Error in periodic_read: {e}")
 
     def start_periodic_read(self):
         """Start the background periodic read thread."""
-        if self._periodic_read_running:
+        if self._periodic_thread and self._periodic_thread.is_alive():
             print("Periodic read already running")
             return
 
-        self._periodic_read_running = True
+        self._stop_event.clear()  # Reset stop signal
         self._periodic_thread = threading.Thread(target=self.periodic_read, daemon=True)
         self._periodic_thread.start()
         print("Periodic P1 read thread started")
 
     def stop_periodic_read(self):
         """Stop the background periodic read thread."""
-        if not self._periodic_read_running:
+        if not (self._periodic_thread and self._periodic_thread.is_alive()):
             print("Periodic read not running")
             return
 
-        self._periodic_read_running = False
+        self._stop_event.set()  # Signal thread to stop
 
         if self._periodic_thread:
             self._periodic_thread.join(timeout=5.0)
@@ -277,7 +241,7 @@ class Meter:
                 return [0.0] * 8
 
             return self._recent_p1_data.copy()
-    
+
     def close(self):
         if self.ser and self.ser.is_open:
             try:
@@ -301,7 +265,7 @@ def main():
 
     except Exception as e:
         print(f"Error reading DSMR meter: {e}")
-        return pd.DataFrame()  # fallback empty
+        return []  # fallback empty
     
 
 

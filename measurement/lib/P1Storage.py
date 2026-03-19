@@ -1,12 +1,12 @@
 import mysql.connector
 import time
-import pandas as pd
 import re
 
 class P1Storage:
-    """
-    Stores P1 DSMR smart-meter data (in dataframe form)
-    into a MariaDB table using OBIS → column mapping.
+    """Stores P1 DSMR smart-meter data into a MariaDB table.
+
+    Data can be provided as a pandas DataFrame or as a list of parsed
+    telegram records (dicts with 'OBIS' and 'Value' keys).
     """
 
     # Mapping from DataFrame OBIS to DB column names
@@ -118,16 +118,25 @@ class P1Storage:
             
             return False
 
-    def df_to_dict(self, df: pd.DataFrame) -> dict:
-        """
-        Convert dataframe to a dictionary matching DB column names.
-        Unknown OBIS codes are ignored automatically.
+    def records_to_dict(self, records) -> dict:
+        """Convert a list of parsed records to a dictionary matching DB columns.
+
+        Supports either:
+        - list of dicts: each dict should have 'OBIS' and 'Value' keys
+        - pandas DataFrame (iterrows)
         """
         row = {}
 
-        for _, rec in df.iterrows():
-            obis = rec["OBIS"]
-            value = rec["Value"]
+        for rec in records:
+            # pandas iterrows yields (index, Series)
+            if isinstance(rec, tuple) and len(rec) == 2:
+                rec = rec[1]
+
+            if not rec:
+                continue
+
+            obis = rec.get("OBIS") if isinstance(rec, dict) else getattr(rec, "get", lambda k, d=None: None)("OBIS")
+            value = rec.get("Value") if isinstance(rec, dict) else getattr(rec, "get", lambda k, d=None: None)("Value")
 
             if obis in self.OBIS_TO_DB:
                 # Remove letters and keep numbers, dot, minus sign
@@ -136,11 +145,12 @@ class P1Storage:
 
         return row
 
-    def store(self, df: pd.DataFrame):
+    def store(self, records):
+        """Insert P1 parsed records into MariaDB.
+
+        Supports either a pandas DataFrame (legacy) or a list of dicts
+        (preferred for lower overhead on embedded systems).
         """
-        Insert dataframe values into MariaDB.
-        """
-        
         # Ensure connection is alive
         if not self._ensure_connected():
             # Silently fail without printing - connection state is already logged
@@ -148,7 +158,8 @@ class P1Storage:
 
         start = time.time()
 
-        data_dict = self.df_to_dict(df)
+        # Support both DataFrame and list-of-dict inputs
+        data_dict = self.records_to_dict(records)
 
         # Prepare INSERT
         columns = ", ".join(data_dict.keys())

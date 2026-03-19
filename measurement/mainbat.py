@@ -5,7 +5,6 @@ from lib.PIDController import PIDController
 from lib.P1Storage import P1Storage
 import os
 import csv
-import pandas as pd
 import datetime
 from astral.sun import sun
 from astral import LocationInfo
@@ -64,13 +63,12 @@ DAY_OFfSET_CHARGE = 0.05 #kW
 
 setpoint=0.0  
 meter = Meter()
+meter.start_periodic_read()  # Start background P1 reading thread
 storage = Batclant()
 pid = PIDController( kp=kp, ki=ki, kd=kd, setpoint=setpoint)
 
 last_riden_set = 0
 MIN_RIDEN_INTERVAL = 0.15  # 150ms
-last_p1 = 0
-last_df = pd.DataFrame()
 
 last_valid_p1_time = time.time()
 watchdog_lock = threading.Lock()   # module-level, near last_valid_p1_time
@@ -104,77 +102,6 @@ def is_daylight(city_name: str = "Eindhoven",
     #print (f"Sunrise: {sunrise}, Sunset: {sunset}, Now: {now}, Daylight: {value_out}")
     # return True/False
     return value_out
-
-
-def get_all_P1_to_df():
-    try:
-        global last_p1, last_df
-
-        now = time.time()
-        if now - last_p1 < 1:  # DSMR sends once per second
-            return last_df     # reuse last telegram
-        
-        last_p1 = now
-        meter.connect()  # connect once
-        parsed_data = meter.read_telegram()  # read full telegram
-        df = meter.to_dataframe(parsed_data)
-        #print (df)
-        last_df = df
-        return df
-    except Exception as e:
-        print(f"Error reading DSMR meter: {e}")
-        last_df = pd.DataFrame()  # fallback empty
-        return last_df
-
-def get_listed_obis_values(df, obis_list):
-    if df is None or df.empty or "OBIS" not in df.columns:
-        return [0.0] * len(obis_list)  # always numeric
-
-    values = []
-    for obis in obis_list:
-        row = df[df['OBIS'] == obis]
-        if not row.empty:
-            try:
-                val = float(row.iloc[0]['Value'])
-                values.append(val)
-            except Exception:
-                values.append(0.0)
-        else:
-            values.append(0.0)
-
-    # Safe subtraction
-    if len(values) == 8:
-        values[2] = (values[2] or 0.0) - (values[5] or 0.0)  # L1 import - export
-        values[3] = (values[3] or 0.0) - (values[6] or 0.0)  # L2 import - export
-        values[4] = (values[4] or 0.0) - (values[7] or 0.0)  # L3
-
-    return values
-
-def get_AC_instantenious(obis_codes=None):
-    
-    if obis_codes is None:
-        obis_codes = [
-            '1-0:1:.7.0',   # total import (or phase-independent)
-            '1-0:2:.7.0',   # total export (or phase-independent)
-            '1-0:21:.7.0',  # L1
-            '1-0:41:.7.0',  # L2  
-            '1-0:61:.7.0',  # L3
-            '1-0:22:.7.0',  # -L1
-            '1-0:42:.7.0',  # -L2  
-            '1-0:62:.7.0'   # -L3
-        ]
-    df = get_all_P1_to_df()
-    AC_values = get_listed_obis_values(df, obis_codes)
-
-    # Store to MariaDB (only if connection is available)
-    if p1 is not None:
-        try:
-            p1.store(df)
-        except Exception:
-            # Silently fail - connection state is logged in P1Storage
-            pass
-    #p1.close()
-    return AC_values
 
 
 def set_riden_out(output_ON= True):
@@ -327,7 +254,7 @@ def main_loop():
             # ---------------------
             # Read AC values safely
             # ---------------------
-            vals =get_AC_instantenious()
+            vals = meter.get_AC_instantenious()
            
             if (  vals is None
                     or not isinstance(vals, list)
@@ -340,6 +267,16 @@ def main_loop():
             # Watchdog refresh: valid data received
             with watchdog_lock:
                 last_valid_p1_time = time.time()
+
+            # Store to MariaDB (only if connection is available)
+            if p1 is not None:
+                try:
+                    parsed = meter.get_recent_parsed()
+                    if parsed:
+                        p1.store(parsed)
+                except Exception:
+                    # Silently fail - connection state is logged in P1Storage
+                    pass
 
             if not vals or len(vals) < 5:
                 print(f"{RED}Invalid P1 data, retrying...{RESET}")
@@ -441,6 +378,12 @@ finally:
         storage.safe_set_value("pindriver", "disconnect", None)
     except Exception as e:
         print(f"Error setting safe values: {e}")
+    
+    # Stop background P1 reading thread
+    try:
+        meter.stop_periodic_read()
+    except Exception as e:
+        print(f"Error stopping P1 reading thread: {e}")
     
     # Close database connection if it exists
     if p1 is not None:

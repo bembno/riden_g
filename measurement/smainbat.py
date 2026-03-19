@@ -3,7 +3,6 @@ from lib.batclant import Batclant
 import time
 from lib.PIDController import PIDController
 from lib.P1Storage import P1Storage
-import pandas as pd
 
 BRIGHT_PINK = "\033[95m"
 RESET = "\033[0m"
@@ -52,27 +51,14 @@ class SMainBat:
             try:
                 data = self.meter.read_telegram()
                 print(f"Raw data: {data}")
-                
+
                 if not data:
                     print(f"{YELLOW}No data read from meter, using last good data.{RESET}")
                     continue
 
-                # Convert to DataFrame for easier processing
-                df = self.meter.to_dataframe(data)
-                if df.empty:
-                    print(f"{YELLOW}No valid data in DataFrame.{RESET}")
-                    continue
-
-                # --- Extract relevant values (instantaneous power) ---
-                import_power = None
-                export_power = None
-
-                # Look for instantaneous power values
-                for _, row in df.iterrows():
-                    if row['OBIS'] == '1-0:1.7.0':  # Instantaneous import power
-                        import_power = float(row['Value'])
-                    elif row['OBIS'] == '1-0:2.7.0':  # Instantaneous export power
-                        export_power = float(row['Value'])
+                # Extract instantaneous import/export power values
+                values = self.meter.get_listed_obis_values(data, ['1-0:1:.7.0', '1-0:2:.7.0'])
+                import_power, export_power = (values + [None, None])[:2]
 
                 if import_power is None or export_power is None:
                     print(f"{YELLOW}Warning: Could not find required power values in data.{RESET}")
@@ -80,7 +66,7 @@ class SMainBat:
 
                 # --- Store raw data ---
                 if self.storage is not None:
-                    self.storage.store(df)
+                    self.storage.store(data)
 
                 # --- Calculate power difference ---
                 power_diff = import_power - export_power
