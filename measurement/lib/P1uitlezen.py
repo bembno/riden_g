@@ -8,17 +8,22 @@ import threading
 
 class Meter:
 
+    # Pre-compile regex for performance
+    OBIS_RE = re.compile(
+        r'(?P<obis>[0-9\-:]+):?(?P<subcode>[0-9\.]*)\((?P<value>[^\)*]+)(?:\*(?P<unit>[^\)]+))?\)'
+    )
+
     def __init__(self, port="/dev/ttyUSB0", baudrate=115200, timeout=2):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
 
         self.ser = None
-        self.last_good_data = []
         self.telegram_end = b'!'
 
         self._recent_parsed_data = []
         self._read_lock = threading.Lock()
+        self._serial_lock = threading.Lock()  # Protects serial port access
         self._recent_p1_data = []
         self._ready = False
         self._stop_event = threading.Event()
@@ -26,32 +31,39 @@ class Meter:
         # NOTE: Thread is NOT started here. Call .start() explicitly.
 
     def connect(self):
-        if self.ser and self.ser.is_open:
-            return
-        try:
-            self.ser = serial.Serial(
-                port=self.port,
-                baudrate=self.baudrate,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                timeout=self.timeout,
-                xonxoff=0,
-                rtscts=0
-            )
-            print(f"Connected to DSMR P1 meter on {self.port}")
-        except Exception as e:
-            sys.exit(f"Error opening {self.port}: {e}")
+        with self._serial_lock:  # Protect serial initialization
+            if self.ser and self.ser.is_open:
+                return
+            try:
+                self.ser = serial.Serial(
+                    port=self.port,
+                    baudrate=self.baudrate,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=self.timeout,
+                    xonxoff=0,
+                    rtscts=0
+                )
+                print(f"Connected to DSMR P1 meter on {self.port}")
+            except Exception as e:
+                self._ready = False  # Reset ready flag on connection failure
+                sys.exit(f"Error opening {self.port}: {e}")
 
     def read_telegram(self):
         """Read until end of telegram (!) or timeout"""
-        if not self.ser or not self.ser.is_open:
-            self.connect()
         lines = []
         start_time = time.time()
-        while True:
+        
+        while not self._stop_event.is_set():  # Check stop before blocking operations
             try:
-                raw = self.ser.readline()
+                # Only acquire lock for the actual readline() call
+                # serial.Serial is thread-safe for single consumer usage
+                with self._serial_lock:
+                    if not self.ser or not self.ser.is_open:
+                        self.connect()
+                    raw = self.ser.readline()
+                
                 if not raw:
                     if time.time() - start_time > self.timeout:
                         break
@@ -64,18 +76,14 @@ class Meter:
                 break
 
         parsed_data = [line for line in (self.parse_line(r) for r in lines) if line]
-        if parsed_data:
-            self.last_good_data = parsed_data
-        return parsed_data or self.last_good_data  # fallback if read fails
+        return parsed_data  # Return empty list if no data, no fallback
     
     def parse_line(self, raw):
         try:
             line = raw.decode('utf-8').strip()
         except Exception:
             line = str(raw).strip()
-        match = re.match(
-            r'(?P<obis>[0-9\-:]+):?(?P<subcode>[0-9\.]*)\((?P<value>[^\)*]+)(?:\*(?P<unit>[^\)]+))?\)', line
-        )
+        match = self.OBIS_RE.match(line)
         if match:
             obis = match.group('obis')
             subcode = match.group('subcode')
@@ -209,6 +217,12 @@ class Meter:
 
             except Exception as e:
                 print(f"Error in periodic_read: {e}")
+                self._ready = False  # Reset ready flag on error
+                time.sleep(1)  # Backoff before retry
+                try:
+                    self.connect()  # Try to reconnect
+                except Exception:
+                    pass  # Connection errors already logged in connect()
 
     def start_periodic_read(self):
         """Start the background periodic read thread."""
@@ -283,12 +297,14 @@ class Meter:
     def close(self):
         self.stop_periodic_read() 
 
-        if self.ser and self.ser.is_open:
-            try:
-                self.ser.close()
-                print(f"Serial port {self.port} closed.")
-            except Exception as e:
-                print(f"Could not close {self.port}: {e}")
+        # Only acquire lock for the actual serial close operation
+        with self._serial_lock:
+            if self.ser and self.ser.is_open:
+                try:
+                    self.ser.close()
+                    print(f"Serial port {self.port} closed.")
+                except Exception as e:
+                    print(f"Could not close {self.port}: {e}")
 
 def main():
     try:

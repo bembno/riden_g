@@ -8,7 +8,7 @@ from drivers.InverterController import InverterController
 from drivers.PinDriver import PinDriver
 
 
-BROKER = "localhost"
+BROKER = "192.168.2.38"
 PORT = 1883
 TOPIC_CMD = "devices/command"
 TOPIC_RESP = "devices/response"
@@ -154,6 +154,7 @@ class DeviceServer:
 
     def on_message(self, client, userdata, msg):
         try:
+            self.last_client_msg = time.time()  # Update watchdog timestamp
             payload = json.loads(msg.payload.decode())
             print("CMD:", payload)
             out = self.handle_command(payload)
@@ -174,11 +175,17 @@ class DeviceServer:
         threading.Thread(target=self.watchdog, daemon=True).start()
 
         # MQTT
-        client = mqtt.Client()
-        client.on_connect = self.on_connect
-        client.on_message = self.on_message
-        client.connect(BROKER, PORT, 60)
-        client.loop_forever()
+        print(f"Connecting to MQTT broker at {BROKER}:{PORT}...")
+        try:
+            client = mqtt.Client()
+            client.on_connect = self.on_connect
+            client.on_message = self.on_message
+            client.connect(BROKER, PORT, 60)
+            print("MQTT connect() called, starting loop...")
+            client.loop_forever()
+        except Exception as e:
+            print(f"MQTT connection failed: {e}")
+            return
 
 
 if __name__ == "__main__":
