@@ -62,8 +62,7 @@ kd = 0.009
 DAY_OFfSET_CHARGE = 0.05 #kW
 
 setpoint=0.0  
-meter = Meter()
-meter.start_periodic_read()  # Start background P1 reading thread
+meter = Meter().start()  # Explicit lifecycle with method chaining
 storage = Batclant()
 pid = PIDController( kp=kp, ki=ki, kd=kd, setpoint=setpoint)
 
@@ -254,7 +253,7 @@ def main_loop():
             # ---------------------
             # Read AC values safely
             # ---------------------
-            vals = meter.get_AC_instantenious()
+            vals = meter.get_power()
            
             if (  vals is None
                     or not isinstance(vals, list)
@@ -382,6 +381,7 @@ finally:
     # Stop background P1 reading thread
     try:
         meter.stop_periodic_read()
+        meter.close()  # Close serial connection
     except Exception as e:
         print(f"Error stopping P1 reading thread: {e}")
     

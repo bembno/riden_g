@@ -1,5 +1,4 @@
 # DSMR P1 reading
-# (c) 10-2012 - GJ - free to copy and paste
 version = "1.0"
 import sys
 import serial
@@ -13,18 +12,18 @@ class Meter:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
+
         self.ser = None
         self.last_good_data = []
-        self.telegram_end = b'!'  # DSMR telegram ends with '!'
+        self.telegram_end = b'!'
 
-        # Thread-safe periodic read variables
-        # _recent_parsed_data stores the last parsed telegram (list of dicts)
-        # _recent_p1_data stores the latest 8 AC values for fast callers.
         self._recent_parsed_data = []
-        self._read_lock = threading.Lock()  # Protects shared data access
-        self._recent_p1_data = []  # Shared storage for most recent AC values
-        self._stop_event = threading.Event()  # Thread-safe stop signal
-        self._periodic_thread = None  # Reference to the periodic read thread
+        self._read_lock = threading.Lock()
+        self._recent_p1_data = []
+        self._ready = False
+        self._stop_event = threading.Event()
+        self._periodic_thread = None
+        # NOTE: Thread is NOT started here. Call .start() explicitly.
 
     def connect(self):
         if self.ser and self.ser.is_open:
@@ -148,9 +147,12 @@ class Meter:
         if not parsed_data:
             return [0.0] * len(obis_list)  # always numeric
 
+        # Create O(1) lookup map instead of O(n) search per code
+        data_map = {r.get('OBIS'): r for r in parsed_data}
+        
         values = []
         for obis in obis_list:
-            record = next((r for r in parsed_data if r.get('OBIS') == obis), None)
+            record = data_map.get(obis)
             if record is not None:
                 try:
                     values.append(float(record.get('Value', 0)))
@@ -172,9 +174,16 @@ class Meter:
         with self._read_lock:
             return list(self._recent_parsed_data) if self._recent_parsed_data else []
 
-    def get_AC_instantenious(self, obis_codes=None):
-        """Get AC instantaneous values from cached data (no direct serial access)."""
-        return self.get_recentP1()
+    def get_power(self):
+        """Return the latest power meter values (thread-safe).
+
+        Returns:
+            list[float]: [import, export, L1, L2, L3, -L1, -L2, -L3]
+        """
+        with self._read_lock:
+            if not self._recent_p1_data:
+                return [0.0] * 8
+            return self._recent_p1_data.copy()
 
     def periodic_read(self):
         """Background thread: reads DSMR telegram continuously."""
@@ -196,6 +205,7 @@ class Meter:
                 with self._read_lock:
                     self._recent_p1_data = values
                     self._recent_parsed_data = parsed_data
+                    self._ready = True  # Data is now available
 
             except Exception as e:
                 print(f"Error in periodic_read: {e}")
@@ -227,22 +237,52 @@ class Meter:
             else:
                 print("Periodic P1 read thread stopped")
 
-    def get_recentP1(self):
+    def start(self):
+        """Start the meter (establish connection and begin reading thread).
+        
+        Explicit lifecycle control: not called automatically in __init__.
+        
+        Returns:
+            self: For method chaining.
         """
-        Return the most recent P1 data in a thread-safe way.
+        self.connect()  # Establish serial connection
+        self.start_periodic_read()  # Start background thread
+        return self
+
+    def is_ready(self):
+        """Check if the meter has successfully read data at least once.
 
         Returns:
-            list[float]: Values in the same format as get_AC_instantenious():
-                        [import, export, L1, L2, L3, -L1, -L2, -L3]
-                        If no data is available yet, returns a list of zeros.
+            bool: True if first telegram has been received, False otherwise.
         """
-        with self._read_lock:
-            if self._recent_p1_data is None:
-                return [0.0] * 8
+        return self._ready
 
-            return self._recent_p1_data.copy()
+    def wait_until_ready(self, timeout=10):
+        """Block until the meter has received at least one telegram.
+
+        Args:
+            timeout (int): Maximum seconds to wait (default 10).
+
+        Returns:
+            bool: True if ready before timeout, False if timeout exceeded.
+        """
+        start = time.time()
+        while time.time() - start < timeout:
+            if self._ready:
+                return True
+            time.sleep(0.05)
+        return False
+
+    def get_recentP1(self):
+        """Deprecated alias for :meth:`get_power`.
+
+        Kept for backwards compatibility.
+        """
+        return self.get_power()
 
     def close(self):
+        self.stop_periodic_read() 
+
         if self.ser and self.ser.is_open:
             try:
                 self.ser.close()
@@ -252,16 +292,19 @@ class Meter:
 
 def main():
     try:
-        meter = Meter()
-        meter.start_periodic_read()  # Start background thread
+        # Initialize meter with explicit lifecycle control
+        meter = Meter().start()  # Method chaining: create and start
+        
+        # Wait until first telegram is received
+        if not meter.wait_until_ready(timeout=5):
+            print("Warning: meter did not become ready within 5 seconds")
+        
         for x in range(10):  # Run for 10 seconds as a demo
-        
-            data = meter.get_recentP1()  # Get latest data anytime (non-blocking)
-            print(x,data)
+            data = meter.get_power()  # Get latest data anytime (non-blocking)
+            print(f"{x} {data}")
             time.sleep(1.0)  # Main loop can do other work or just wait
-        meter.stop_periodic_read()   # Stop when done
         
-
+        meter.close()  # Stop thread and close serial connection
 
     except Exception as e:
         print(f"Error reading DSMR meter: {e}")
