@@ -18,6 +18,10 @@ class Meter:
         self.last_good_data = []
         self.telegram_end = b'!'  # DSMR telegram ends with '!'
 
+        # Caching helper (avoid reading more than once per second)
+        self._last_read_time = 0.0
+        self._last_df = pd.DataFrame()
+
     def connect(self):
         if self.ser and self.ser.is_open:
             return
@@ -141,6 +145,68 @@ class Meter:
             df['Description'] = df['OBIS'].apply(self.obis_description)
         return df
     
+    def get_all_P1_to_df(self):
+        try:
+            now = time.time()
+            if now - self._last_read_time < 1:  # DSMR sends once per second
+                return self._last_df     # reuse last telegram
+
+            self._last_read_time = now
+            self.connect()  # connect once
+            parsed_data = self.read_telegram()  # read full telegram
+            df = self.to_dataframe(parsed_data)
+            #print (df)
+            self._last_df = df
+            return df
+        except Exception as e:
+            print(f"Error reading DSMR meter: {e}")
+            self._last_df = pd.DataFrame()  # fallback empty
+            return self._last_df
+
+    def get_listed_obis_values(self, df, obis_list):
+        if df is None or df.empty or "OBIS" not in df.columns:
+            return [0.0] * len(obis_list)  # always numeric
+
+        values = []
+        for obis in obis_list:
+            row = df[df['OBIS'] == obis]
+            if not row.empty:
+                try:
+                    val = float(row.iloc[0]['Value'])
+                    values.append(val)
+                except Exception:
+                    values.append(0.0)
+            else:
+                values.append(0.0)
+
+        # Safe subtraction
+        if len(values) == 8:
+            values[2] = (values[2] or 0.0) - (values[5] or 0.0)  # L1 import - export
+            values[3] = (values[3] or 0.0) - (values[6] or 0.0)  # L2 import - export
+            values[4] = (values[4] or 0.0) - (values[7] or 0.0)  # L3
+
+        return values
+
+    def get_AC_instantenious(self, obis_codes=None):
+    
+        if obis_codes is None:
+            obis_codes = [
+                '1-0:1:.7.0',   # total import (or phase-independent)
+                '1-0:2:.7.0',   # total export (or phase-independent)
+                '1-0:21:.7.0',  # L1
+                '1-0:41:.7.0',  # L2  
+                '1-0:61:.7.0',  # L3
+                '1-0:22:.7.0',  # -L1
+                '1-0:42:.7.0',  # -L2  
+                '1-0:62:.7.0'   # -L3
+            ]
+        df = self.get_all_P1_to_df()
+        AC_values = self.get_listed_obis_values(df, obis_codes)
+
+        return AC_values
+
+
+
     def close(self):
         if self.ser and self.ser.is_open:
             try:
@@ -150,17 +216,22 @@ class Meter:
                 print(f"Could not close {self.port}: {e}")
 
 def main():
-    print("DSMR P1 reading", version)
-    print("Control-C to stop")
-    print("If needed, adjust the value of ser.port in the python script")
-    meter = Meter()
+    # print("DSMR P1 reading", version)
+    # print("Control-C to stop")
+    # print("If needed, adjust the value of ser.port in the python script")
+
+
 
     try:
-        meter.connect()  # connect once
-        parsed_data = meter.read_telegram()  # read full telegram
-        df = meter.to_dataframe(parsed_data)
-        print("\nDataFrame from P1 reading:")
+        meter = Meter()
+        df=meter.get_AC_instantenious()
         print(df)
+
+    #     meter.connect()  # connect once
+    #     parsed_data = meter.read_telegram()  # read full telegram
+    #     df = meter.to_dataframe(parsed_data)
+    #     print("\nDataFrame from P1 reading:")
+    #     #print(df)
 
         #return df
     except Exception as e:
