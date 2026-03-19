@@ -6,6 +6,7 @@ import serial
 import pandas as pd
 import re
 import time   # <--- Add this
+import threading
 from queue import Queue, Empty
 
 class Meter:
@@ -21,6 +22,12 @@ class Meter:
         # Caching helper (avoid reading more than once per second)
         self._last_read_time = 0.0
         self._last_df = pd.DataFrame()
+
+        # Thread-safe periodic read variables
+        self._read_lock = threading.Lock()  # Protects shared data access
+        self._recent_p1_data = []  # Shared storage for most recent AC values
+        self._periodic_read_running = False  # Control flag for periodic reading thread
+        self._periodic_thread = None  # Reference to the periodic read thread
 
     def connect(self):
         if self.ser and self.ser.is_open:
@@ -205,8 +212,72 @@ class Meter:
 
         return AC_values
 
+    def periodic_read(self):
+        """Background thread: reads DSMR telegram continuously."""
+        while self._periodic_read_running:
+            try:
+                parsed_data = self.read_telegram()
+                df = self.to_dataframe(parsed_data)
 
+                values = self.get_listed_obis_values(df, [
+                    '1-0:1:.7.0',
+                    '1-0:2:.7.0',
+                    '1-0:21:.7.0',
+                    '1-0:41:.7.0',
+                    '1-0:61:.7.0',
+                    '1-0:22:.7.0',
+                    '1-0:42:.7.0',
+                    '1-0:62:.7.0'
+                ])
 
+                with self._read_lock:
+                    self._recent_p1_data = values
+
+            except Exception as e:
+                print(f"Error in periodic_read: {e}")
+
+    def start_periodic_read(self):
+        """Start the background periodic read thread."""
+        if self._periodic_read_running:
+            print("Periodic read already running")
+            return
+
+        self._periodic_read_running = True
+        self._periodic_thread = threading.Thread(target=self.periodic_read, daemon=True)
+        self._periodic_thread.start()
+        print("Periodic P1 read thread started")
+
+    def stop_periodic_read(self):
+        """Stop the background periodic read thread."""
+        if not self._periodic_read_running:
+            print("Periodic read not running")
+            return
+
+        self._periodic_read_running = False
+
+        if self._periodic_thread:
+            self._periodic_thread.join(timeout=5.0)
+
+            if self._periodic_thread.is_alive():
+                print("Warning: periodic read thread did not stop in time")
+            else:
+                print("Periodic P1 read thread stopped")
+
+    def get_recentP1(self):
+        """
+        Return the most recent P1 data in a thread-safe way.
+
+        Returns:
+            list[float]: Values in the same format as get_AC_instantenious():
+                        [import, export, L1, L2, L3, -L1, -L2, -L3]
+                        If no data is available yet, returns a list of zeros.
+        """
+        with self._read_lock:
+            if self._recent_p1_data is None:
+                return [0.0] * 8
+
+            return self._recent_p1_data.copy()
+    
     def close(self):
         if self.ser and self.ser.is_open:
             try:
@@ -216,24 +287,18 @@ class Meter:
                 print(f"Could not close {self.port}: {e}")
 
 def main():
-    # print("DSMR P1 reading", version)
-    # print("Control-C to stop")
-    # print("If needed, adjust the value of ser.port in the python script")
-
-
-
     try:
         meter = Meter()
-        df=meter.get_AC_instantenious()
-        print(df)
+        meter.start_periodic_read()  # Start background thread
+        for x in range(10):  # Run for 10 seconds as a demo
+        
+            data = meter.get_recentP1()  # Get latest data anytime (non-blocking)
+            print(x,data)
+            time.sleep(1.0)  # Main loop can do other work or just wait
+        meter.stop_periodic_read()   # Stop when done
+        
 
-    #     meter.connect()  # connect once
-    #     parsed_data = meter.read_telegram()  # read full telegram
-    #     df = meter.to_dataframe(parsed_data)
-    #     print("\nDataFrame from P1 reading:")
-    #     #print(df)
 
-        #return df
     except Exception as e:
         print(f"Error reading DSMR meter: {e}")
         return pd.DataFrame()  # fallback empty
