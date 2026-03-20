@@ -29,7 +29,7 @@ class SMainBat:
     def __init__(self):
         self.meter = Meter().start()  # Start the meter thread immediately
         self.batclant = Batclant()
-        self.pid = PIDController(kp=0.4, ki=0.08, kd=0.005, setpoint=0.0, max_change_ratio=2.0)
+        self.pid = PIDController(kp=0.3, ki=0.08, kd=0.005, setpoint=0.0, max_change_ratio=1.0)
         
         if not self.meter.wait_until_ready(timeout=5):
                     print("Warning: meter did not become ready within 5 seconds")
@@ -164,7 +164,10 @@ class SMainBat:
                 # ---------------------
                 # PID calculation
                 # ---------------------
-            power_diff = import_p - export_p
+            power_diff = import_p - export_p-0.05
+            if abs(power_diff) < 0.05:
+                power_diff = 0.0
+
             pid_power = self.pid.adjustPower(power_diff) or 0.0
             inv_power = max(0, round(pid_power * 1000))
 
@@ -179,8 +182,7 @@ class SMainBat:
                 war_power=inv_power,
                 rid_P_out=self.rid_P_out,
                 current=self.current,
-                v_out=self.v_out
-                                    )
+                v_out=self.v_out    )
                 # ---------------------
                 # Device control
                 # ---------------------
@@ -236,10 +238,7 @@ class SMainBat:
         while True:
             try:
                 values=self.main_loop()
-                #print(*values)
-                
-               # self.print_status_line(*values)
-                time.sleep(0.5)
+                time.sleep(1)
             except KeyboardInterrupt:
                 print("Interrupted by user")
                 break
