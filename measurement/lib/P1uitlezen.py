@@ -28,6 +28,7 @@ class Meter:
         self._ready = False
         self._stop_event = threading.Event()
         self._periodic_thread = None
+        self._import_history = []
         # NOTE: Thread is NOT started here. Call .start() explicitly.
 
     def connect(self):
@@ -183,15 +184,29 @@ class Meter:
             return list(self._recent_parsed_data) if self._recent_parsed_data else []
 
     def get_power(self):
-        """Return the latest power meter values (thread-safe).
+        """Return the latest power meter values (thread-safe)."""
 
-        Returns:
-            list[float]: [import, export, L1, L2, L3, -L1, -L2, -L3]
-        """
         with self._read_lock:
             if not self._recent_p1_data:
                 return [0.0] * 8
-            return self._recent_p1_data.copy()
+
+            data = self._recent_p1_data.copy()
+
+            # --- Moving average for import (configurable window) ---
+            import_val = data[0]
+
+            self._import_history.append(import_val)
+
+            # keep only last N samples
+            window = 1  #self.import_ma_window
+            if len(self._import_history) > window:
+                self._import_history = self._import_history[-window:]
+
+            avg_import = sum(self._import_history) / len(self._import_history)
+
+            data[0] = avg_import
+
+            return data
 
     def periodic_read(self):
         """Background thread: reads DSMR telegram continuously."""

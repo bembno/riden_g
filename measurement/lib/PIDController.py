@@ -14,49 +14,45 @@ class PIDController:
 
     def adjustPower(self, measured_value, min_output=-1.8, max_output=0.9):
         """
-        Adjust power output based on measured value.
-
-        Parameters:
-            measured_value (float): Current measurement.
-            min_output (float): Minimum allowed output.
-            max_output (float): Maximum allowed output.
-            max_change_ratio (float): Maximum allowed relative change (e.g., 2.0 = ±200%).
+        Stable PID with fixed rate limiting (10% of full range per step).
         """
+
         error = measured_value - self.setpoint
         now = time.time()
 
         dt = (now - self.last_time) if self.last_time else 1.0
+
         # --- PID core ---
-        # --- Conditional integration (anti-windup) ---
         if min_output < self.last_output < max_output:
             self.integral += error * dt
 
         derivative = (error - self.last_error) / dt if dt > 0 else 0.0
-        output = self.kp * error + self.ki * self.integral + self.kd * derivative
 
-        # --- Anti-windup ---
-        if max_output is not None and self.ki != 0.0:
-            if output > max_output:
-                self.integral -= error * dt
-                output = max_output
-            elif output < min_output:
-                self.integral -= error * dt
-                output = min_output
+        output = (
+            self.kp * error +
+            self.ki * self.integral +
+            self.kd * derivative
+        )
 
-        # --- Rate limiter (±max_change_ratio * previous absolute value) ---
-        if self.last_time is not None:
-            max_change = abs(self.last_output) * self.max_change_ratio
-            if abs(self.last_output) < 0.05:
-                # small values → allow some minimal movement
-                max_change = 0.1
-            upper_limit = self.last_output + max_change
-            lower_limit = self.last_output - max_change
-            output = max(min(output, upper_limit), lower_limit)
-
-        # --- Clamp to min/max range ---
+        # --- Clamp BEFORE rate limit (prevents windup explosion) ---
         output = max(min(output, max_output), min_output)
 
-        # --- Save for next loop ---
+        # --- Anti-windup correction ---
+        if self.ki != 0.0:
+            if output == max_output or output == min_output:
+                self.integral -= error * dt
+
+        # --- Fixed rate limiter (10% of full range) ---
+        if self.last_time is not None:
+            full_range = max_output - min_output  # e.g. 2.7 kW
+            max_change = 0.5 * full_range        # 10% → 0.27 kW
+
+            upper_limit = self.last_output + max_change
+            lower_limit = self.last_output - max_change
+
+            output = max(min(output, upper_limit), lower_limit)
+
+        # --- Save state ---
         self.last_error = error
         self.last_time = now
         self.last_output = output
