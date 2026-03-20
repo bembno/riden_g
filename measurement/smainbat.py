@@ -26,12 +26,10 @@ BRIGHT_WHITE = "\033[97m"
 
 class SMainBat:
 
-
-
     def __init__(self):
         self.meter = Meter().start()  # Start the meter thread immediately
         self.batclant = Batclant()
-        self.pid = PIDController(kp=0.5, ki=0.1, kd=0.05, setpoint=0.0, max_change_ratio=2.0)
+        self.pid = PIDController(kp=0.4, ki=0.08, kd=0.005, setpoint=0.0, max_change_ratio=2.0)
         
         if not self.meter.wait_until_ready(timeout=5):
                     print("Warning: meter did not become ready within 5 seconds")
@@ -154,7 +152,69 @@ class SMainBat:
                     # Silently fail - connection state is logged in P1Storage
                     pass
 
+    def main_loop(self):
+        rid_P_out=0.0
+        current=0.0
+        v_out=0.0
+        try:
+            import_p, export_p, L1, L2, L3 = (self.meter.get_power() + [0.0] * 8)[:5]
+                # ---------------------
+                # PID calculation
+                # ---------------------
+            power_diff = import_p - export_p
+            pid_power = self.pid.adjustPower(power_diff) or 0.0
+            inv_power = max(0, round(pid_power * 1000))
 
+                # ---------------------
+                # Device control
+                # ---------------------
+            if pid_power >= 0:
+                    # Discharge via inverter
+                self.batclant.set_value( "inverter", "set_power", inv_power)
+                self.batclant.set_value( "riden","set_i_set", 0.0)
+                status_on=self.batclant.get_value("riden", "is_output")
+                if status_on:
+                    self.set_riden_out(output_ON= False)
+                    
+            else:
+                    # Charge via Riden
+                self.batclant.set_value( "inverter", "set_power", 0)
+                self.batclant.set_value( "riden", "set_output", True)
+
+                v_out_val = self.batclant.get_value("riden", "get_v_out")
+                v_out = v_out_val if v_out_val not in (None, "") else v_out
+                v_for_calc = v_out if v_out not in (None, 0) else self.set_v_set_initial
+
+                current = self.pid.PtoI( pid_power, v_for_calc)
+                p = self.batclant.get_value( "riden", "get_p_out")
+                rid_P_out = (p or 0.0) / 1000.0
+                    
+                self.set_riden_out(output_ON= True)
+                self.batclant.set_value( "riden","set_i_set", current)
+
+
+
+                # ---------------------
+                # Print & log consistent line
+                # ---------------------
+            self.print_status_line(
+                import_p=import_p,
+                export_p=export_p,
+                power_diff=power_diff,
+                pid_power=pid_power,
+                L1=L1,
+                L2=L2,
+                L3=L3,
+                war_power=inv_power,
+                rid_P_out=rid_P_out,
+                current=current,
+                v_out=v_out
+                )
+
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"{RED}Error in main loop: {e}{RESET}")
+            time.sleep(2.0)
 
 
     def run(self):
@@ -162,79 +222,13 @@ class SMainBat:
         self.initialize_values()
       
         while True:
-            rid_P_out=0.0
-            current=0.0
-            v_out=0.0
             try:
-                # Wait until first telegram is received
-                
-                
-                vals = self.meter.get_power()  # Get latest data anytime (non-blocking)
-                import_p, export_p, L1, L2, L3 = (vals + [0.0]*8)[:5]
-                
-                # ---------------------
-                # PID calculation
-                # ---------------------
-                power_diff = import_p - export_p
-                pid_power = self.pid.adjustPower(power_diff) or 0.0
-                inv_power = max(0, round(pid_power * 1000))
-
-                # ---------------------
-                # Device control
-                # ---------------------
-                if pid_power >= 0:
-                    # Discharge via inverter
-                    self.batclant.set_value( "inverter", "set_power", inv_power)
-                    self.batclant.set_value( "riden","set_i_set", 0.0)
-                    status_on=self.batclant.get_value("riden", "is_output")
-                    if status_on:
-                        self.set_riden_out(output_ON= False)
-                    
-                else:
-                    # Charge via Riden
-                    self.batclant.set_value( "inverter", "set_power", 0)
-                    self.batclant.set_value( "riden", "set_output", True)
-
-                    v_out_val = self.batclant.get_value("riden", "get_v_out")
-                    v_out = v_out_val if v_out_val not in (None, "") else v_out
-                    v_for_calc = v_out if v_out not in (None, 0) else self.set_v_set_initial
-
-                    current = self.pid.PtoI( pid_power, v_for_calc)
-                    p = self.batclant.get_value( "riden", "get_p_out")
-                    rid_P_out = (p or 0.0) / 1000.0
-                    
-                    self.set_riden_out(output_ON= True)
-                    self.batclant.set_value( "riden","set_i_set", current)
-
-
-
-                # ---------------------
-                # Print & log consistent line
-                # ---------------------
-                self.print_status_line(
-                    import_p=import_p,
-                    export_p=export_p,
-                    power_diff=power_diff,
-                    pid_power=pid_power,
-                    L1=L1,
-                    L2=L2,
-                    L3=L3,
-                    war_power=inv_power,
-                    rid_P_out=rid_P_out,
-                    current=current,
-                    v_out=v_out
-                )
-
-                time.sleep(0.5)
-                               
-
+                self.main_loop()
 
             except KeyboardInterrupt:
                 print("Interrupted by user")
                 break
-            except Exception as e:
-                print(f"{RED}Error in main loop: {e}{RESET}")
-                time.sleep(2.0)
+
 
     def cleanup(self):
         """Clean up resources"""
