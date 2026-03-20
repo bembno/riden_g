@@ -37,6 +37,10 @@ class SMainBat:
         self.storage = None
         self.set_v_set_initial=57.2
 
+        self.rid_P_out=0.0
+        self.current=0.0
+        self.v_out=0.0
+
         try:
             self.storage = P1Storage(
                 host="192.168.2.33",
@@ -152,10 +156,9 @@ class SMainBat:
                     # Silently fail - connection state is logged in P1Storage
                     pass
 
+
     def main_loop(self):
-        rid_P_out=0.0
-        current=0.0
-        v_out=0.0
+
         try:
             import_p, export_p, L1, L2, L3 = (self.meter.get_power() + [0.0] * 8)[:5]
                 # ---------------------
@@ -165,6 +168,19 @@ class SMainBat:
             pid_power = self.pid.adjustPower(power_diff) or 0.0
             inv_power = max(0, round(pid_power * 1000))
 
+            self.print_status_line(
+                import_p=import_p,
+                export_p=export_p,
+                power_diff=power_diff,
+                pid_power=pid_power,
+                L1=L1,
+                L2=L2,
+                L3=L3,
+                war_power=inv_power,
+                rid_P_out=self.rid_P_out,
+                current=self.current,
+                v_out=self.v_out
+                                    )
                 # ---------------------
                 # Device control
                 # ---------------------
@@ -182,36 +198,32 @@ class SMainBat:
                 self.batclant.set_value( "riden", "set_output", True)
 
                 v_out_val = self.batclant.get_value("riden", "get_v_out")
-                v_out = v_out_val if v_out_val not in (None, "") else v_out
-                v_for_calc = v_out if v_out not in (None, 0) else self.set_v_set_initial
+                self.v_out = v_out_val if v_out_val not in (None, "") else v_out
+                v_for_calc = self.v_out if self.v_out not in (None, 0) else self.set_v_set_initial
 
-                current = self.pid.PtoI( pid_power, v_for_calc)
+                self.current = self.pid.PtoI( pid_power, v_for_calc)
                 p = self.batclant.get_value( "riden", "get_p_out")
-                rid_P_out = (p or 0.0) / 1000.0
+                self.rid_P_out = (p or 0.0) / 1000.0
                     
                 self.set_riden_out(output_ON= True)
-                self.batclant.set_value( "riden","set_i_set", current)
+                self.batclant.set_value( "riden","set_i_set", self.current)
 
 
+            
+            return import_p,\
+                    export_p,\
+                    power_diff,\
+                    pid_power,\
+                    L1,\
+                    L2,\
+                    L3,\
+                    inv_power,\
+                    self.rid_P_out,\
+                    self.current,\
+                    self.v_out           
 
-                # ---------------------
-                # Print & log consistent line
-                # ---------------------
-            self.print_status_line(
-                import_p=import_p,
-                export_p=export_p,
-                power_diff=power_diff,
-                pid_power=pid_power,
-                L1=L1,
-                L2=L2,
-                L3=L3,
-                war_power=inv_power,
-                rid_P_out=rid_P_out,
-                current=current,
-                v_out=v_out
-                )
 
-            time.sleep(0.5)
+            
         except Exception as e:
             print(f"{RED}Error in main loop: {e}{RESET}")
             time.sleep(2.0)
@@ -223,8 +235,11 @@ class SMainBat:
       
         while True:
             try:
-                self.main_loop()
-
+                values=self.main_loop()
+                #print(*values)
+                
+               # self.print_status_line(*values)
+                time.sleep(0.5)
             except KeyboardInterrupt:
                 print("Interrupted by user")
                 break
