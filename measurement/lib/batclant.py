@@ -1,5 +1,6 @@
 import json
 import time
+import threading
 import paho.mqtt.client as mqtt
 
 
@@ -10,15 +11,18 @@ class Batclant:
         self.port = port
         self.topic_cmd = topic_cmd
         self.topic_resp = topic_resp
-        self.client = mqtt.Client()
+        self.client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2 )  
         self.last_response = None
         self.connected = False 
+        self._response_lock = threading.Lock()
         self.client.on_message = self._on_message
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
-
-        self.client.loop_start()
+        
         self._connect()
+        self.client.loop_start()
+        
 
     def _connect(self):
         while True:
@@ -29,20 +33,23 @@ class Batclant:
                 print("MQTT connect failed, retrying in 2s...")
                 time.sleep(2)
 
-    def _on_connect(self, client, userdata, flags, rc):
-        if rc == 0:
+    def _on_connect(self, client, userdata, flags, reason_code, properties):
+        if reason_code == 0:
             self.connected = True
             print("MQTT connected, subscribing to response topic...")
             self.client.subscribe(self.topic_resp)
         else:
-            print(f"MQTT connection failed with code {rc}")
+            print(f"MQTT connection failed with code {reason_code}")
             self.connected = False 
     
     def _on_message(self, client, userdata, msg):
         try:
-            self.last_response = json.loads(msg.payload.decode())
+            response = json.loads(msg.payload.decode())
         except Exception as e:
-            self.last_response = {"status": "error", "message": f"Invalid JSON: {e}"}
+            response = {"status": "error", "message": f"Invalid JSON: {e}"}
+
+        with self._response_lock:
+            self.last_response = response
     
     def _restart_mqtt(self):
         try:
@@ -52,11 +59,13 @@ class Batclant:
         except Exception:
             pass
         time.sleep(2)
-        self.client = mqtt.Client()
+        self.client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         self.client.on_message = self._on_message
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
-        self.last_response = None
+        with self._response_lock:
+            self.last_response = None
         self.connected = False
         self.client.loop_start()
         self._connect()
@@ -64,56 +73,34 @@ class Batclant:
     # ----------------------------
     # Generic send
     # ----------------------------
-    def _send_command(self, device: str, function: str, value=None, timeout=2.0, retries=1):
-        """
-        Send a command to a device via MQTT and wait for response.
-        Avoids infinite loops and handles reconnects safely.
-        """
+    def _send_command(self, device, function, value=None, timeout=2.0):
         cmd = {"device": device, "action": function}
         if value is not None:
             cmd["value"] = value
 
-        for attempt in range(1, retries + 1):
+        with self._response_lock:
             self.last_response = None
 
-            # Ensure connection
-            if not self.connected:
-                print(f"MQTT not connected, attempt {attempt}/{retries} reconnecting...")
-                try:
-                    self.client.reconnect()
-                except Exception as e:
-                    print(f"Reconnect failed: {e}, will retry in next attempt")
-                    time.sleep(1)
-                    continue  # retry next attempt
+        self.client.publish(self.topic_cmd, json.dumps(cmd))
 
-            # Only publish if connected
-            if self.connected:
-                try:
-                    self.client.publish(self.topic_cmd, json.dumps(cmd))
-                except Exception as e:
-                    print(f"Failed to publish command: {e}, attempt {attempt}/{retries}")
-                    time.sleep(1)
-                    continue
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._response_lock:
+                response = self.last_response
+            if response is not None:
+                return response
+            time.sleep(0.05)
 
-            # Wait for response with timeout
-            start_time = time.time()
-            while self.last_response is None and (time.time() - start_time) < timeout:
-                time.sleep(0.05)
-
-            if self.last_response is not None:
-                return self.last_response
-
-            print(f"Timeout waiting for response from {device}.{function}, attempt {attempt}/{retries}")
-            time.sleep(1)  # short backoff before next retry
-
-        # All retries failed
-        return {"status": "error", "message": f"Timeout waiting for response from {device}.{function} after {retries} attempts"}
-
-    def _on_disconnect(self, client, userdata, rc):
+        return {
+            "status": "error",
+            "message": f"Timeout waiting for response to {device}.{function}",
+        }
+    
+    
+    def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         self.connected = False
-        print(f"MQTT disconnected (code {rc}), will attempt reconnect in background...")
+        print(f"MQTT disconnected (code {reason_code}), reconnecting...")
 
-        # reconnect in background thread
         def try_reconnect():
             while not self.connected:
                 try:
@@ -123,9 +110,7 @@ class Batclant:
                     time.sleep(5)
                 time.sleep(1)
 
-        import threading
         threading.Thread(target=try_reconnect, daemon=True).start()
-
 
 
     def set_value(self, device: str, function: str, value, timeout=2.0):
@@ -142,34 +127,34 @@ class Batclant:
             raise RuntimeError(f"Failed to get {device}.{function}: {resp.get('message')}")
         return resp.get("result")
     
-    def safe_set_value(self, device, function, value, timeout=2.0, retries=1):
-        for attempt in range(retries):
-            try:
-                return self.set_value(device, function, value, timeout=timeout)
-            except RuntimeError as e:
-                print(f"Warning: {e}, attempt {attempt+1}/{retries}")
-                try:
-                    print("Reconnecting MQTT client...")
-                    self.client.reconnect()
-                except Exception:
-                    print("MQTT reconnect failed, will retry...")
-                time.sleep(1)
-        raise RuntimeError(f"Failed to set {device}.{function} after {retries} retries")
+    # def safe_set_value(self, device, function, value, timeout=2.0, retries=1):
+    #     for attempt in range(retries):
+    #         try:
+    #             return self.set_value(device, function, value, timeout=timeout)
+    #         except RuntimeError as e:
+    #             print(f"Warning: {e}, attempt {attempt+1}/{retries}")
+    #             try:
+    #                 print("Reconnecting MQTT client...")
+    #                 self.client.reconnect()
+    #             except Exception:
+    #                 print("MQTT reconnect failed, will retry...")
+    #             time.sleep(1)
+    #     raise RuntimeError(f"Failed to set {device}.{function} after {retries} retries")
 
 
-    def safe_get_value(self, device, function, timeout=2.0, retries=1):
-        for attempt in range(retries):
-            try:
-                return self.get_value(device, function, timeout=timeout)
-            except RuntimeError as e:
-                print(f"Warning: {e}, attempt {attempt+1}/{retries}")
-                try:
-                    print("Reconnecting MQTT client...")
-                    self.client.reconnect()
-                except Exception:
-                    print("MQTT reconnect failed, will retry...")
-                time.sleep(1)
-        raise RuntimeError(f"Failed to get {device}.{function} after {retries} retries")
+    # def safe_get_value(self, device, function, timeout=2.0, retries=1):
+    #     for attempt in range(retries):
+    #         try:
+    #             return self.get_value(device, function, timeout=timeout)
+    #         except RuntimeError as e:
+    #             print(f"Warning: {e}, attempt {attempt+1}/{retries}")
+    #             try:
+    #                 print("Reconnecting MQTT client...")
+    #                 self.client.reconnect()
+    #             except Exception:
+    #                 print("MQTT reconnect failed, will retry...")
+    #             time.sleep(1)
+    #     raise RuntimeError(f"Failed to get {device}.{function} after {retries} retries")
 
     # ----------------------------
     # Stop MQTT loop gracefully
@@ -186,20 +171,7 @@ if __name__ == "__main__":
     bat = Batclant()
 
     # Set Riden values
+    bat.set_value("inverter", "set_power", 0)
     bat.set_value("riden", "set_v_set", 56.0)
-    bat.set_value("riden", "set_i_set", 1.0)
-    bat.set_value("riden", "set_output", True)
-
-    # Get Riden values
-    print("V_SET:", bat.get_value("riden", "get_v_set"))
-    print("V_OUT:", bat.get_value("riden", "get_v_out"))
-    print("I_OUT:", bat.get_value("riden", "get_i_out"))
-    print("P_OUT:", bat.get_value("riden", "get_p_out"))
-    print("Output status:", bat.get_value("riden", "is_output"))
-
-    # Set and get inverter power
-    bat.set_value("inverter", "set_power", 100)
-    print("Inverter power:", bat.get_value("inverter", "get_power"))
-
     # Close connection
     bat.close()

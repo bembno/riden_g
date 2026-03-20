@@ -62,3 +62,11 @@ class PIDController:
         self.last_output = output
 
         return output
+    
+    def PtoI(self, power_kwatts, voltage=0, max_current=30.0):
+            if voltage==0:
+                voltage=self.set_v_set_initial
+                
+            current = abs( power_kwatts * 1000 / voltage)
+            safe_current = round(min(current, max_current),3)
+            return safe_current
