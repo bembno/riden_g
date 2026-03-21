@@ -198,7 +198,7 @@ class Meter:
             self._import_history.append(import_val)
 
             # keep only last N samples
-            window = 1  #self.import_ma_window
+            window = 5  #self.import_ma_window
             if len(self._import_history) > window:
                 self._import_history = self._import_history[-window:]
 

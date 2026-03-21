@@ -29,7 +29,8 @@ class SMainBat:
     def __init__(self):
         self.meter = Meter().start()  # Start the meter thread immediately
         self.batclant = Batclant()
-        self.pid = PIDController(kp=0.1, ki=0.02, kd=0.0005, setpoint=0.0, max_change_ratio=1.0)
+
+        self.pid = PIDController(kp=0.03, ki=0.05, kd=0.05, setpoint=0.0, max_change_ratio=0.1)
         
         if not self.meter.wait_until_ready(timeout=5):
                     print("Warning: meter did not become ready within 5 seconds")
@@ -152,6 +153,11 @@ class SMainBat:
                         current=current,
                         v_out=v_out
                     )
+
+                    parsed =self.meter.get_recent_parsed()
+                    if parsed:
+                        self.storage.store(parsed)
+                        #print("Parsed meter data:", parsed)
                 except Exception:
                     # Silently fail - connection state is logged in P1Storage
                     pass
@@ -164,8 +170,8 @@ class SMainBat:
                 # ---------------------
                 # PID calculation
                 # ---------------------
-            power_diff = import_p - export_p-0.05
-            if abs(power_diff) < 0.05:
+            power_diff = import_p - export_p-0.02
+            if abs(power_diff) < 0.02:
                 power_diff = 0.0
 
             pid_power = self.pid.adjustPower(power_diff) or 0.0

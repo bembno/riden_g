@@ -10,6 +10,6 @@ done
 sleep 2
 
 # start in screen
-screen -S a -dm bash -c 'cd ~/Desktop/prog/measurement/ && exec python mainbat.py'
+screen -S a -dm bash -c 'cd ~/Desktop/prog/measurement/ && exec python smainbat.py'
 
 echo "Server started in screen session 'a'"

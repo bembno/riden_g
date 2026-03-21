@@ -1,68 +1,92 @@
 import time
 
+
 class PIDController:
-    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0,max_change_ratio=5.0):
+    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0, max_change_ratio=0.1):
         self.kp = kp
         self.ki = ki
         self.kd = kd
         self.setpoint = setpoint
-        self.max_change_ratio=max_change_ratio
+
+        # max output change per step (0.1 = 10% of full range)
+        self.max_change_ratio = max_change_ratio
+
         self.integral = 0.0
-        self.last_error = 0.0
         self.last_time = None
-        self.last_output = 0.0  # for rate limiting
+        self.last_output = 0.0
+        self.last_measured = None
+
+        # optional default voltage (used in PtoI)
+        self.set_v_set_initial = 0
 
     def adjustPower(self, measured_value, min_output=-1.8, max_output=0.9):
         """
-        Stable PID with fixed rate limiting (10% of full range per step).
+        Stable PID controller with:
+        - derivative on measurement (no kick)
+        - integral clamping (anti-windup)
+        - rate limiting
         """
 
-        error = measured_value - self.setpoint
         now = time.time()
+        dt = now - self.last_time if self.last_time else 1.0
 
-        dt = (now - self.last_time) if self.last_time else 1.0
+        # --- Error ---
+        error = measured_value - self.setpoint
 
-        # --- PID core ---
-        if min_output < self.last_output < max_output:
-            self.integral += error * dt
+        # --- Integral ---
+        self.integral += error * dt
 
-        derivative = (error - self.last_error) / dt if dt > 0 else 0.0
+        # --- Derivative (on measurement, prevents kick) ---
+        if self.last_measured is None:
+            derivative = 0.0
+        else:
+            derivative = -(measured_value - self.last_measured) / dt
 
+        # --- PID output ---
         output = (
             self.kp * error +
             self.ki * self.integral +
             self.kd * derivative
         )
 
-        # --- Clamp BEFORE rate limit (prevents windup explosion) ---
+        # --- Clamp output ---
         output = max(min(output, max_output), min_output)
 
-        # --- Anti-windup correction ---
+        # --- Anti-windup ---
         if self.ki != 0.0:
-            if output == max_output or output == min_output:
-                self.integral -= error * dt
+            max_integral = max_output / self.ki
+            min_integral = min_output / self.ki
+            self.integral = max(min(self.integral, max_integral), min_integral)
 
-        # --- Fixed rate limiter (10% of full range) ---
-        if self.last_time is not None:
-            full_range = max_output - min_output  # e.g. 2.7 kW
-            max_change = 0.5 * full_range        # 10% → 0.27 kW
+        # --- Rate limiting ---
+        full_range = max_output - min_output
+        max_change = self.max_change_ratio * full_range
 
-            upper_limit = self.last_output + max_change
-            lower_limit = self.last_output - max_change
-
-            output = max(min(output, upper_limit), lower_limit)
+        delta = output - self.last_output
+        if delta > max_change:
+            output = self.last_output + max_change
+        elif delta < -max_change:
+            output = self.last_output - max_change
 
         # --- Save state ---
-        self.last_error = error
         self.last_time = now
         self.last_output = output
+        self.last_measured = measured_value
 
         return output
-    
+
     def PtoI(self, power_kwatts, voltage=0, max_current=30.0):
-            if voltage==0:
-                voltage=self.set_v_set_initial
-                
-            current = abs( power_kwatts * 1000 / voltage)
-            safe_current = round(min(current, max_current),3)
-            return safe_current
+        """
+        Convert power (kW) to current (A)
+        """
+
+        if voltage == 0:
+            voltage = self.set_v_set_initial
+
+        if voltage == 0:
+            return 0.0  # avoid division by zero
+
+        current = abs(power_kwatts * 1000 / voltage)
+        safe_current = round(min(current, max_current), 3)
+
+        return safe_current
