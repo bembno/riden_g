@@ -19,7 +19,7 @@ class PIDController:
         # optional default voltage (used in PtoI)
         self.set_v_set_initial = 0
 
-    def adjustPower(self, measured_value, min_output=-1.8, max_output=0.9):
+    def adjustPower(self, measured_value, min_output=-1.8, filter_coef=0.1, max_output=0.9):
         """
         Stable PID controller with:
         - derivative on measurement (no kick)
@@ -28,10 +28,20 @@ class PIDController:
         """
 
         now = time.time()
-        dt = now - self.last_time if self.last_time else 1.0
+        if self.last_time is None:
+            self.last_time = now
+            self.last_measured = measured_value
+            return 0.0
+        
+        dt = now - self.last_time
 
+        #measurement filtering
+        if self.last_measured is not None:
+            filtered_measured_value = filter_coef * measured_value + (1 - filter_coef) * self.last_measured
+        else:
+            filtered_measured_value = 0.0
         # --- Error ---
-        error = measured_value - self.setpoint
+        error = filtered_measured_value - self.setpoint
 
         # --- Integral ---
         self.integral += error * dt
@@ -40,7 +50,7 @@ class PIDController:
         if self.last_measured is None:
             derivative = 0.0
         else:
-            derivative = -(measured_value - self.last_measured) / dt
+            derivative = -(filtered_measured_value - self.last_measured) / dt
 
         # --- PID output ---
         output = (
