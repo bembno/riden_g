@@ -41,6 +41,10 @@ class SMainBat:
         self.rid_P_out=0.0
         self.current=0.0
         self.v_out=0.0
+        self.temp_int_c = 0.0
+        self.temp_ext_c = 0.0
+        self.max_current=30.0
+
 
         try:
             self.storage = P1Storage(
@@ -134,7 +138,9 @@ class SMainBat:
             add("rid", rid_P_out, rid_color)
             add("I", current, curr_color, fmt="{:.1f}")
             add("V", v_out, fmt="{:.1f}")
-
+            add("V", v_out, fmt="{:.1f}")
+            add("Te", self.temp_ext_c, fmt="{:.0f}")
+            add("Ti", self.temp_int_c, fmt="{:.0f}")
             print(" ".join(parts))
 
             # Log to database only if connection is available
@@ -151,7 +157,9 @@ class SMainBat:
                         war_power=war_power,
                         rid_P_out=rid_P_out,
                         current=current,
-                        v_out=v_out
+                        v_out=v_out,
+                        temp_ext_c=self.temp_ext_c,
+                        temp_int_c=self.temp_int_c
                     )
 
                     parsed =self.meter.get_recent_parsed()
@@ -192,6 +200,17 @@ class SMainBat:
                 # ---------------------
                 # Device control
                 # ---------------------
+
+            self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
+            self.temp_ext_c = self.batclant.get_value("riden", "get_ext_c")
+            
+            if self.temp_int_c>30.0:
+                print(f"{YELLOW}Warning: Riden internal temperature high: {self.temp_int_c}C{RESET}")
+                max_current_T=10.0
+            else:
+                max_current_T=self.max_current
+
+
             if pid_power >= 0:
                     # Discharge via inverter
                 self.batclant.set_value( "inverter", "set_power", inv_power)
@@ -206,10 +225,10 @@ class SMainBat:
                 self.batclant.set_value( "riden", "set_output", True)
 
                 v_out_val = self.batclant.get_value("riden", "get_v_out")
-                self.v_out = v_out_val if v_out_val not in (None, "") else v_out
+                self.v_out = v_out_val if v_out_val not in (None, "") else 0.0
                 v_for_calc = self.v_out if self.v_out not in (None, 0) else self.set_v_set_initial
 
-                self.current = self.pid.PtoI( pid_power, v_for_calc)
+                self.current = self.pid.PtoI( pid_power, v_for_calc,max_current=max_current_T)
                 p = self.batclant.get_value( "riden", "get_p_out")
                 self.rid_P_out = (p or 0.0) / 1000.0
                     

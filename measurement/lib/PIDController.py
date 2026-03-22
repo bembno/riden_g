@@ -14,7 +14,7 @@ class PIDController:
         self.integral = 0.0
         self.last_time = None
         self.last_output = 0.0
-        self.last_measured = None
+        self.last_measured = 0.0
 
         # optional default voltage (used in PtoI)
         self.set_v_set_initial = 0
@@ -44,7 +44,11 @@ class PIDController:
         error = filtered_measured_value - self.setpoint
 
         # --- Integral ---
-        self.integral += error * dt
+        #self.integral += error * dt
+        # Only integrate if NOT saturating in same direction
+        if not ((self.last_output >= max_output and error > 0) or
+                (self.last_output <= min_output and error < 0)):
+            self.integral += error * dt
 
         # --- Derivative (on measurement, prevents kick) ---
         if self.last_measured is None:
@@ -81,7 +85,7 @@ class PIDController:
         # --- Save state ---
         self.last_time = now
         self.last_output = output
-        self.last_measured = measured_value
+        self.last_measured = filtered_measured_value
 
         return output
 

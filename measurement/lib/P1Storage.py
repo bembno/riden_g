@@ -184,7 +184,7 @@ class P1Storage:
     def log_store(self,
               import_p=0.0, export_p=0.0, power_diff=0.0, pid_power=0.0,
               L1=0.0, L2=0.0, L3=0.0,
-              war_power=0.0, rid_P_out=0.0, current=0.0, v_out=0.0):
+              war_power=0.0, rid_P_out=0.0, current=0.0, v_out=0.0,temp_ext_c=0.0,temp_int_c=0.0):
         """
         Stores real-time inverter/meter status into t_logs table.
         Values equal to zero are stored as NULL.
@@ -208,6 +208,8 @@ class P1Storage:
             "rid_P_out": rid_P_out if rid_P_out != 0.0 else None,
             "current": current if current != 0.0 else None,
             "v_out": v_out if v_out != 0.0 else None,
+            "Te": temp_ext_c if temp_ext_c != 0.0 else None,
+            "Ti": temp_int_c if temp_int_c != 0.0 else None,
         }
 
         # Only keep non-None values
