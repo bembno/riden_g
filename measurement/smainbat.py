@@ -22,7 +22,7 @@ BRIGHT_MAGENTA = "\033[95m"
 BRIGHT_CYAN = "\033[96m"
 BRIGHT_WHITE = "\033[97m"
 
-
+P_adding=0.0
 
 class SMainBat:
 
@@ -44,7 +44,8 @@ class SMainBat:
         self.temp_int_c = 0.0
         self.temp_ext_c = 0.0
         self.max_current=30.0
-
+        self.min_output=-1.8
+        self.max_output=0.9
 
         try:
             self.storage = P1Storage(
@@ -178,11 +179,12 @@ class SMainBat:
                 # ---------------------
                 # PID calculation
                 # ---------------------
-            power_diff = import_p - export_p-0.02
+            power_diff = import_p - export_p-0.02 - P_adding
             if abs(power_diff) < 0.02:
                 power_diff = 0.0
 
-            pid_power = self.pid.adjustPower(power_diff) or 0.0
+
+            pid_power = self.pid.adjustPower(power_diff,min_output=self.min_output, max_output=self.max_output) or 0.0
             inv_power = max(0, round(pid_power * 1000))
 
             self.print_status_line(
@@ -204,11 +206,13 @@ class SMainBat:
             self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
             self.temp_ext_c = self.batclant.get_value("riden", "get_ext_c")
             
-            if self.temp_int_c>30.0:
-                print(f"{YELLOW}Warning: Riden internal temperature high: {self.temp_int_c}C{RESET}")
-                max_current_T=10.0
+            if self.temp_ext_c>29.0:
+                print(f"{YELLOW}Warning: Riden external temperature high: {self.temp_ext_c}C{RESET}")
+                max_current_T=30.0
+                self.min_output=-0.650
             else:
                 max_current_T=self.max_current
+                self.min_output=-1.8
 
 
             if pid_power >= 0:
