@@ -45,7 +45,7 @@ class SMainBat:
         self.temp_ext_c = 0.0
         self.max_current=30.0
         self.min_output=-1.8
-        self.max_output=0.9
+        self.max_output=1.8
 
         try:
             self.storage = P1Storage(
@@ -206,18 +206,20 @@ class SMainBat:
             self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
             self.temp_ext_c = self.batclant.get_value("riden", "get_ext_c")
             
-            if self.temp_ext_c>29.0:
+            if self.temp_ext_c>35.0:
                 print(f"{YELLOW}Warning: Riden external temperature high: {self.temp_ext_c}C{RESET}")
                 max_current_T=30.0
-                self.min_output=-0.650
+                self.min_output=-1.200
             else:
                 max_current_T=self.max_current
                 self.min_output=-1.8
 
 
             if pid_power >= 0:
-                    # Discharge via inverter
-                self.batclant.set_value( "inverter", "set_power", inv_power)
+                    # Discharge via 2 inverters
+                double_inv_power = inv_power / 2
+                self.batclant.set_value( "inverter", "set_power", double_inv_power)  
+                #self.batclant.set_value( "inverter", "set_power", inv_power)
                 self.batclant.set_value( "riden","set_i_set", 0.0)
                 status_on=self.batclant.get_value("riden", "is_output")
                 if status_on:
