@@ -1,5 +1,6 @@
 from serial import Serial, SerialException
 from modbus_tk.modbus_rtu import RtuMaster
+from modbus_tk.defines import WRITE_MULTIPLE_REGISTERS
 from modbus_tk.exceptions import ModbusInvalidResponseError
 import time
 from datetime import datetime
@@ -58,18 +59,29 @@ class Riden:
 
         self.update()
     # --- NEW: safe serial open helper ---
-    def _open_serial(self):
-        """Try to (re)open serial connection."""
-        while True:
+    def _open_serial(self, max_retries=None):
+        """Try to (re)open serial connection. max_retries=None for infinite, int for finite."""
+        if max_retries is None:
+            iterator = iter(int, 1)  # infinite
+            total = "∞"
+        else:
+            iterator = range(max_retries)
+            total = str(max_retries)
+        
+        for attempt in iterator:
             try:
-                print(f"🔌 Opening Riden on {self.port} @ {self.baudrate}...")
+                attempt_num = attempt + 1 if max_retries else "∞"
+                print(f"🔌 Opening Riden on {self.port} @ {self.baudrate} (attempt {attempt_num}/{total})...")
                 self.serial = Serial(self.port, self.baudrate, timeout=self.timeout)
                 self.master = RtuMaster(self.serial)
                 self.master.set_timeout(self.timeout)
                 print("✅ Serial connection established.")
                 return
             except SerialException as e:
-                print(f"⚠️ Riden port open failed ({e}), retrying in 5s...")
+                attempt_num = attempt + 1 if max_retries else "∞"
+                print(f"⚠️ Riden port open failed ({e}), attempt {attempt_num}/{total}")
+                if max_retries is not None and attempt >= max_retries - 1:
+                    raise e
                 time.sleep(5)
 
     def reconnect(self):
@@ -79,7 +91,7 @@ class Riden:
                 self.serial.close()
         except Exception:
             pass
-        self._open_serial()
+        self._open_serial(max_retries=3)
         try:
             self.init_device()
         except Exception as e:

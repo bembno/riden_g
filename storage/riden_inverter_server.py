@@ -25,6 +25,7 @@ class DeviceServer:
         self.charger = None
         self.inverter = None
         self.pindriver = None
+        self.charger_required = False  # Track if charger was ever successfully connected
 
     # ------------------------------------------------------------
     # CONNECTION HELPERS
@@ -40,17 +41,37 @@ class DeviceServer:
     def connect_charger(self):
         self.charger = self._try_connect("charger", lambda: Riden(port="/dev/ttyUSB0", baudrate=115200, address=1))
         if self.charger:
-            print("Charger OK")
+            try:
+                # Test if device is actually responsive (not just serial connected)
+                test = self.charger.read(0, 1)  # Try reading device ID
+                if test is None:
+                    raise Exception("Device read failed - not responsive")
+                print("Charger OK")
+                self.charger_required = True
+            except Exception as e:
+                print(f"Charger connection test failed: {e}")
+                # Close the serial port to free it for other devices
+                if self.charger and self.charger.serial:
+                    try:
+                        self.charger.serial.close()
+                    except:
+                        pass
+                self.charger = None
 
     def connect_inverter(self):
-        def init():
-            inv = InverterController(port="/dev/ttyUSB1", baud=4800)
+        def init(port):
+            inv = InverterController(port=port, baud=4800)
             inv.Connect()
             inv.ThreadLooping(start_power=0)
             print("Inverter OK")
             return inv
 
-        self.inverter = self._try_connect("inverter", init)
+        # Try primary port first
+        self.inverter = self._try_connect("inverter", lambda: init("/dev/ttyUSB1"))
+        if self.inverter is None:
+            # If primary fails, try alternative port (for when charger is not plugged)
+            print("Inverter not found on /dev/ttyUSB1, trying /dev/ttyUSB0...")
+            self.inverter = self._try_connect("inverter", lambda: init("/dev/ttyUSB0"))
 
     def connect_pindriver(self, pin=17):
         def init():
@@ -70,13 +91,25 @@ class DeviceServer:
                     print("Charger not connected, attempting reconnect...")
                     try:
                         if self.charger:
-                            self.charger.reconnect()  # Use Riden's built-in reconnect
+                            self.charger.reconnect()
+                            # Test responsiveness after reconnect
+                            test = self.charger.read(0, 1)
+                            if test is None:
+                                raise Exception("Reconnected device not responsive")
                         else:
-                            self.connect_charger()  # Try initial connection
+                            # Try fresh connection
+                            temp_charger = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)
+                            # Test responsiveness
+                            test = temp_charger.read(0, 1)
+                            if test is None:
+                                raise Exception("Reconnected device not responsive")
+                            self.charger = temp_charger
                         if self.charger and self.charger.is_connected():
+                            self.charger_required = True
                             print("Charger reconnected successfully.")
                     except Exception as e:
                         print(f"Charger reconnect failed: {e}")
+                        self.charger = None  # Ensure it's None if test failed
                 # Optionally add similar checks for inverter/pindriver if needed
             time.sleep(10)  # Check every 10 seconds (adjust as needed)
 
@@ -84,6 +117,7 @@ class DeviceServer:
     # COMMAND HANDLING
     # ------------------------------------------------------------
     def handle_command(self, payload):
+        print(f"Handling command: {payload}")  # Debug: log received commands
         self.last_client_msg = time.time()
 
         device = payload.get("device")
@@ -94,6 +128,7 @@ class DeviceServer:
             try:
                 return self._dispatch(device, action, value)
             except Exception as e:
+                print(f"Command failed: {e}")  # Debug: log errors
                 return {"status": "error", "message": str(e)}
 
     def _dispatch(self, device, action, value):
@@ -120,15 +155,28 @@ class DeviceServer:
         return {"status": "ok", "device": "riden", "result": out}
 
     def _cmd_inverter(self, action, value):
+        print(f"Inverter command: {action} {value}")  # Debug: log inverter commands
         if self.inverter is None:
+            print("Inverter not connected, attempting to connect...")  # Debug
             self.connect_inverter()
 
         if action == "set_power":
-            self.inverter.ModifyPower(value)
-            return {"status": "ok", "device": "inverter", "result": value}
+            if self.inverter is not None:
+                print(f"Setting inverter power to {value}")  # Debug
+                self.inverter.ModifyPower(value)
+                return {"status": "ok", "device": "inverter", "result": value}
+            else:
+                print("Inverter connection failed")  # Debug
+                return {"status": "error", "message": "Inverter not connected"}
 
         if action == "get_power":
-            return {"status": "ok", "device": "inverter", "result": self.inverter.GetCurrentPower()}
+            if self.inverter is not None:
+                power = self.inverter.GetCurrentPower()
+                print(f"Got inverter power: {power}")  # Debug
+                return {"status": "ok", "device": "inverter", "result": power}
+            else:
+                print("Inverter connection failed")  # Debug
+                return {"status": "error", "message": "Inverter not connected"}
 
         return {"status": "error", "message": f"Bad inverter action {action}"}
 
@@ -153,12 +201,21 @@ class DeviceServer:
         while True:
             if time.time() - self.last_client_msg > WATCHDOG_TIMEOUT:
                 with self.lock:
-                    print("WATCHDOG: forcing inverter=0W, charger OFF")
-                    try:
-                        self.inverter.ModifyPower(0)
-                        self.charger.set_output(False)
-                    except:
-                        pass
+                    charger_ok = self.charger is not None and self.charger.is_connected()
+                    
+                    if self.charger_required:
+                        # Charger was connected before → Enforce safety
+                        print("WATCHDOG: Charger required, forcing safety shutdown")
+                        try:
+                            if self.inverter is not None:
+                                self.inverter.ModifyPower(0)
+                            if charger_ok:
+                                self.charger.set_output(False)
+                        except Exception as e:
+                            print(f"WATCHDOG safety shutdown failed: {e}")
+                    else:
+                        # Charger never connected → Allow independent operation
+                        print("WATCHDOG: Charger not required, inverter operating independently (no shutdown)")
             time.sleep(CHECK_INTERVAL)
 
     # ------------------------------------------------------------

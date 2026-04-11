@@ -202,9 +202,13 @@ class SMainBat:
                 # ---------------------
                 # Device control
                 # ---------------------
-
-            self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
-            self.temp_ext_c = self.batclant.get_value("riden", "get_ext_c")
+            try:
+                self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
+                self.temp_ext_c = self.batclant.get_value("riden", "get_ext_c")
+            except Exception as e:
+                print(f"{YELLOW}Warning: Failed to read temperatures: {e}{RESET}")    
+                self.temp_ext_c = 0.0
+                self.temp_int_c = 0.0
             
             if self.temp_ext_c>self.temp_max_allowed:
                 print(f"{YELLOW}Warning: Riden external temperature high: {self.temp_ext_c}C{RESET}")
@@ -220,8 +224,13 @@ class SMainBat:
                 double_inv_power = inv_power / 2
                 self.batclant.set_value( "inverter", "set_power", double_inv_power)  
                 #self.batclant.set_value( "inverter", "set_power", inv_power)
-                self.batclant.set_value( "riden","set_i_set", 0.0)
-                status_on=self.batclant.get_value("riden", "is_output")
+                try:
+                    self.batclant.set_value( "riden","set_i_set", 0.0)
+                    status_on=self.batclant.get_value("riden", "is_output")
+                except Exception as e:
+                    print(f"{YELLOW}Warning: Failed to set Riden output or read status: {e}{RESET}")
+                    status_on=False
+                
                 if status_on:
                     self.set_riden_out(output_ON= False)
                     
@@ -237,10 +246,11 @@ class SMainBat:
                 self.current = self.pid.PtoI( pid_power, v_for_calc,max_current=max_current_T)
                 p = self.batclant.get_value( "riden", "get_p_out")
                 self.rid_P_out = (p or 0.0) / 1000.0
-                    
-                self.set_riden_out(output_ON= True)
-                self.batclant.set_value( "riden","set_i_set", self.current)
-
+                try:    
+                    self.set_riden_out(output_ON= True)
+                    self.batclant.set_value( "riden","set_i_set", self.current)
+                except Exception as e:
+                    print(f"{YELLOW}Warning: Failed to set Riden output or current: {e}{RESET}")
 
             
             return import_p,\
