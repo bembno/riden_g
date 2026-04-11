@@ -46,7 +46,7 @@ class SMainBat:
         self.max_current=30.0
         self.min_output=-1.8
         self.max_output=1.8
-
+        self.temp_max_allowed=35.0
         try:
             self.storage = P1Storage(
                 host="192.168.2.33",
@@ -206,7 +206,7 @@ class SMainBat:
             self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
             self.temp_ext_c = self.batclant.get_value("riden", "get_ext_c")
             
-            if self.temp_ext_c>35.0:
+            if self.temp_ext_c>self.temp_max_allowed:
                 print(f"{YELLOW}Warning: Riden external temperature high: {self.temp_ext_c}C{RESET}")
                 max_current_T=30.0
                 self.min_output=-1.200

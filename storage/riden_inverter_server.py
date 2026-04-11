@@ -29,22 +29,18 @@ class DeviceServer:
     # ------------------------------------------------------------
     # CONNECTION HELPERS
     # ------------------------------------------------------------
-    def _connect_loop(self, name, fn):
-        while True:
-            try:
-                print(f"Connecting to {name}...")
-                return fn()
-            except Exception as e:
-                print(f"{name} connection failed: {e} → retry in 5s")
-                time.sleep(5)
+    def _try_connect(self, name, fn):
+        try:
+            print(f"Connecting to {name}...")
+            return fn()
+        except Exception as e:
+            print(f"{name} connection failed: {e}")
+            return None
 
     def connect_charger(self):
-        def init():
-            c = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)
-            print(f"Charger OK")
-            return c
-
-        self.charger = self._connect_loop("charger", init)
+        self.charger = self._try_connect("charger", lambda: Riden(port="/dev/ttyUSB0", baudrate=115200, address=1))
+        if self.charger:
+            print("Charger OK")
 
     def connect_inverter(self):
         def init():
@@ -54,7 +50,7 @@ class DeviceServer:
             print("Inverter OK")
             return inv
 
-        self.inverter = self._connect_loop("inverter", init)
+        self.inverter = self._try_connect("inverter", init)
 
     def connect_pindriver(self, pin=17):
         def init():
@@ -62,7 +58,27 @@ class DeviceServer:
             print("PinDriver OK")
             return pd
 
-        self.pindriver = self._connect_loop("pindriver", init)
+        self.pindriver = self._try_connect("pindriver", init)
+
+    def monitor_devices(self):
+        """Proactively monitor and reconnect devices in the background."""
+        print("Device monitor active...")
+        while True:
+            with self.lock:
+                # Monitor charger
+                if self.charger is None or not self.charger.is_connected():
+                    print("Charger not connected, attempting reconnect...")
+                    try:
+                        if self.charger:
+                            self.charger.reconnect()  # Use Riden's built-in reconnect
+                        else:
+                            self.connect_charger()  # Try initial connection
+                        if self.charger and self.charger.is_connected():
+                            print("Charger reconnected successfully.")
+                    except Exception as e:
+                        print(f"Charger reconnect failed: {e}")
+                # Optionally add similar checks for inverter/pindriver if needed
+            time.sleep(10)  # Check every 10 seconds (adjust as needed)
 
     # ------------------------------------------------------------
     # COMMAND HANDLING
@@ -166,10 +182,13 @@ class DeviceServer:
     # MAIN START
     # ------------------------------------------------------------
     def start(self):
-        # Connect devices
+        # Connect devices (non-blocking now)
         self.connect_charger()
         self.connect_inverter()
         self.connect_pindriver()
+
+        # Start device monitor
+        threading.Thread(target=self.monitor_devices, daemon=True).start()
 
         # Start watchdog
         threading.Thread(target=self.watchdog, daemon=True).start()
