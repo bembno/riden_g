@@ -213,7 +213,7 @@ class SMainBat:
             if self.temp_ext_c>self.temp_max_allowed:
                 print(f"{YELLOW}Warning: Riden external temperature high: {self.temp_ext_c}C{RESET}")
                 max_current_T=30.0
-                self.min_output=-1.200
+                self.min_output=-1.500
             else:
                 max_current_T=self.max_current
                 self.min_output=-1.8
