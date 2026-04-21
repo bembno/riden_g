@@ -3,6 +3,9 @@ from lib.batclant import Batclant
 import time
 from lib.PIDController import PIDController
 from lib.P1Storage import P1Storage
+import threading
+import os
+import subprocess
 
 BRIGHT_PINK = "\033[95m"
 RESET = "\033[0m"
@@ -24,6 +27,27 @@ BRIGHT_WHITE = "\033[97m"
 
 P_adding=0.0
 
+
+class SoftwareWatchdog:
+    def __init__(self, timeout=60):
+        self.timeout = timeout
+        self.counter = 0
+        self.lock = threading.Lock()
+        self.alive = True
+
+    def reset(self):
+        with self.lock:
+            self.counter = 0
+
+    def run(self):
+        while self.alive:
+            time.sleep(1)
+
+            with self.lock:
+                self.counter += 1
+                if self.counter >= self.timeout:
+                    print("WATCHDOG → REBOOTING SYSTEM")
+                    subprocess.run(["sudo", "reboot"])
 class SMainBat:
 
     def __init__(self):
@@ -37,6 +61,10 @@ class SMainBat:
         # Initialize database storage (optional)
         self.storage = None
         self.set_v_set_initial=57.2
+
+        #sw watchdog to ensure script restarts if it hangs for some reason (e.g. meter thread issues)
+        self.sw_watchdog = SoftwareWatchdog(timeout=60)
+        threading.Thread(target=self.sw_watchdog.run, daemon=True).start()
 
         self.rid_P_out=0.0
         self.current=0.0
@@ -269,7 +297,7 @@ class SMainBat:
             
         except Exception as e:
             print(f"{RED}Error in main loop: {e}{RESET}")
-            time.sleep(2.0)
+            time.sleep(1.0)
 
 
     def run(self):
@@ -279,6 +307,9 @@ class SMainBat:
         while True:
             try:
                 values=self.main_loop()
+                # RESET WATCHDOG HERE (critical line)
+                self.sw_watchdog.reset()
+                
                 time.sleep(0.5)
             except KeyboardInterrupt:
                 print("Interrupted by user")
