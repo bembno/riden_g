@@ -113,14 +113,14 @@ class Batclant:
         threading.Thread(target=try_reconnect, daemon=True).start()
 
 
-    def set_value(self, device: str, function: str, value, timeout=2):
+    def set_value(self, device: str, function: str, value, timeout=1):
         """Set a value on a device (Riden or Inverter)."""
         resp = self._send_command(device, function, value=value, timeout=timeout)
         if resp.get("status") != "ok":
             raise RuntimeError(f"Failed to set {device}.{function}: {resp.get('message')}")
         return resp.get("result")
 
-    def get_value(self, device: str, function: str, timeout=2.0):
+    def get_value(self, device: str, function: str, timeout=1.0):
         """Get a value from a device. Returns the 'result' directly."""
         resp = self._send_command(device, function, value=None, timeout=timeout)
         if resp.get("status") != "ok":

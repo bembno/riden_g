@@ -4,7 +4,7 @@ import time
 from lib.PIDController import PIDController
 from lib.P1Storage import P1Storage
 import threading
-import os
+import os, sys
 import subprocess
 
 BRIGHT_PINK = "\033[95m"
@@ -26,7 +26,13 @@ BRIGHT_CYAN = "\033[96m"
 BRIGHT_WHITE = "\033[97m"
 
 P_adding=0.0
-
+# Allow override from command line
+if len(sys.argv) > 1:
+    try:
+        P_adding = float(sys.argv[1])
+        print(f"Using P_adding from CLI: {P_adding}")
+    except ValueError:
+        print(f"Invalid P_adding value '{sys.argv[1]}', using default {P_adding}")
 
 class SoftwareWatchdog:
     def __init__(self, timeout=60):
