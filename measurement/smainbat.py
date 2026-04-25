@@ -53,14 +53,14 @@ class SMainBat:
     def __init__(self):
         self.meter = Meter().start()  # Start the meter thread immediately
         self.batclant = Batclant()
-
-        self.pid = PIDController(kp=0.03, ki=0.05, kd=0.05, setpoint=0.0, max_change_ratio=0.1)
+        self.set_v_set_initial=58.0
+        self.pid = PIDController(kp=0.03, ki=0.1, kd=0.05, setpoint=0.0, max_change_ratio=0.1)
         
-        if not self.meter.wait_until_ready(timeout=5):
+        if not self.meter.wait_until_ready(timeout=1):
                     print("Warning: meter did not become ready within 5 seconds")
         # Initialize database storage (optional)
         self.storage = None
-        self.set_v_set_initial=57.2
+        
 
         #sw watchdog to ensure script restarts if it hangs for some reason (e.g. meter thread issues)
         self.sw_watchdog = SoftwareWatchdog(timeout=60)
@@ -102,7 +102,7 @@ class SMainBat:
             self.batclant.set_value("riden", "set_output", output_ON)
 
             # optional small delay for hardware to apply change
-            time.sleep(0.1)
+            time.sleep(0.01)
 
             # verify after change
             new_state = self.batclant.get_value("riden", "is_output")
@@ -297,7 +297,7 @@ class SMainBat:
             
         except Exception as e:
             print(f"{RED}Error in main loop: {e}{RESET}")
-            time.sleep(1.0)
+            time.sleep(0.001)
 
 
     def run(self):

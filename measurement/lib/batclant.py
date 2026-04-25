@@ -31,7 +31,7 @@ class Batclant:
                 break
             except Exception:
                 print("MQTT connect failed, retrying in 2s...")
-                time.sleep(2)
+                time.sleep(1)
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         if reason_code == 0:
@@ -58,7 +58,7 @@ class Batclant:
             self.client.disconnect()
         except Exception:
             pass
-        time.sleep(2)
+        time.sleep(1)
         self.client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         self.client.on_message = self._on_message
@@ -73,7 +73,7 @@ class Batclant:
     # ----------------------------
     # Generic send
     # ----------------------------
-    def _send_command(self, device, function, value=None, timeout=2.0):
+    def _send_command(self, device, function, value=None, timeout=1.0):
         cmd = {"device": device, "action": function}
         if value is not None:
             cmd["value"] = value
@@ -106,55 +106,27 @@ class Batclant:
                 try:
                     self.client.reconnect()
                 except Exception as e:
-                    print(f"Reconnect failed: {e}, retrying in 5s")
-                    time.sleep(5)
+                    print(f"Reconnect failed: {e}, retrying in 1s")
+                    time.sleep(1)
                 time.sleep(1)
 
         threading.Thread(target=try_reconnect, daemon=True).start()
 
 
-    def set_value(self, device: str, function: str, value, timeout=2.0):
+    def set_value(self, device: str, function: str, value, timeout=1.0):
         """Set a value on a device (Riden or Inverter)."""
         resp = self._send_command(device, function, value=value, timeout=timeout)
         if resp.get("status") != "ok":
             raise RuntimeError(f"Failed to set {device}.{function}: {resp.get('message')}")
         return resp.get("result")
 
-    def get_value(self, device: str, function: str, timeout=2.0):
+    def get_value(self, device: str, function: str, timeout=1.0):
         """Get a value from a device. Returns the 'result' directly."""
         resp = self._send_command(device, function, value=None, timeout=timeout)
         if resp.get("status") != "ok":
             raise RuntimeError(f"Failed to get {device}.{function}: {resp.get('message')}")
         return resp.get("result")
     
-    # def safe_set_value(self, device, function, value, timeout=2.0, retries=1):
-    #     for attempt in range(retries):
-    #         try:
-    #             return self.set_value(device, function, value, timeout=timeout)
-    #         except RuntimeError as e:
-    #             print(f"Warning: {e}, attempt {attempt+1}/{retries}")
-    #             try:
-    #                 print("Reconnecting MQTT client...")
-    #                 self.client.reconnect()
-    #             except Exception:
-    #                 print("MQTT reconnect failed, will retry...")
-    #             time.sleep(1)
-    #     raise RuntimeError(f"Failed to set {device}.{function} after {retries} retries")
-
-
-    # def safe_get_value(self, device, function, timeout=2.0, retries=1):
-    #     for attempt in range(retries):
-    #         try:
-    #             return self.get_value(device, function, timeout=timeout)
-    #         except RuntimeError as e:
-    #             print(f"Warning: {e}, attempt {attempt+1}/{retries}")
-    #             try:
-    #                 print("Reconnecting MQTT client...")
-    #                 self.client.reconnect()
-    #             except Exception:
-    #                 print("MQTT reconnect failed, will retry...")
-    #             time.sleep(1)
-    #     raise RuntimeError(f"Failed to get {device}.{function} after {retries} retries")
 
     # ----------------------------
     # Stop MQTT loop gracefully

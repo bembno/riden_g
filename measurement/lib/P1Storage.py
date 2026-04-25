@@ -69,7 +69,7 @@ class P1Storage:
                 password=self.password,
                 database=self.database,
                 autocommit=True,
-                connection_timeout=3,  # 3 second timeout for initial connection
+                connection_timeout=1,  # 3 second timeout for initial connection
                 auth_plugin='mysql_native_password'
             )
             self.cursor = self.connection.cursor()
