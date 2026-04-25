@@ -47,6 +47,7 @@ class SoftwareWatchdog:
                 self.counter += 1
                 if self.counter >= self.timeout:
                     print("WATCHDOG → REBOOTING SYSTEM")
+                    self.alive = False  # stop loop
                     subprocess.run(["sudo", "reboot"])
 class SMainBat:
 
@@ -54,7 +55,7 @@ class SMainBat:
         self.meter = Meter().start()  # Start the meter thread immediately
         self.batclant = Batclant()
         self.set_v_set_initial=58.0
-        self.pid = PIDController(kp=0.03, ki=0.1, kd=0.05, setpoint=0.0, max_change_ratio=0.1)
+        self.pid = PIDController(kp=0.05, ki=0.1, kd=0.05, setpoint=0.0, max_change_ratio=0.1)
         
         if not self.meter.wait_until_ready(timeout=1):
                     print("Warning: meter did not become ready within 5 seconds")
@@ -64,7 +65,7 @@ class SMainBat:
 
         #sw watchdog to ensure script restarts if it hangs for some reason (e.g. meter thread issues)
         self.sw_watchdog = SoftwareWatchdog(timeout=60)
-        threading.Thread(target=self.sw_watchdog.run, daemon=True).start()
+        threading.Thread(target=self.sw_watchdog.run, daemon=True,name="SoftwareWatchdog").start()
 
         self.rid_P_out=0.0
         self.current=0.0
@@ -75,6 +76,14 @@ class SMainBat:
         self.min_output=-1.8
         self.max_output=1.8
         self.temp_max_allowed=35.0
+        
+        # Riden health tracking
+        self.riden_available = False
+        self.riden_last_error = None
+        self.riden_last_error_time = None
+        self.riden_error_count = 0
+        self.last_riden_check = 0
+        self.riden_check_interval = 10.0  # Check every 2 seconds
         try:
             self.storage = P1Storage(
                 host="192.168.2.33",
@@ -93,39 +102,77 @@ class SMainBat:
             print(f"{YELLOW}WARNING: Failed to initialize database: {e}{RESET}")
             self.storage = None
             
+    def check_riden_health(self):
+        """Check if Riden is responding. Returns True if healthy, False otherwise."""
+        try:
+            # Try a simple read to test connectivity
+            result = self.batclant.get_value("riden", "get_v_out")
+            if result is not None:
+                self.riden_available = True
+                self.riden_error_count = 0
+                return True
+            else:
+                raise Exception("Riden returned None")
+        except Exception as e:
+            self.riden_available = False
+            self.riden_error_count += 1
+            self.riden_last_error = str(e)
+            self.riden_last_error_time = time.time()
+            return False
+
     def set_riden_out(self, output_ON=True):
         # read current state first
-        ride_out_state = self.batclant.get_value("riden", "is_output")
+        if not self.riden_available:
+            return None
+            
+        try:
+            ride_out_state = self.batclant.get_value("riden", "is_output")
 
-        # only write if state change is needed
-        if ride_out_state != output_ON:
-            self.batclant.set_value("riden", "set_output", output_ON)
+            # only write if state change is needed
+            if ride_out_state != output_ON:
+                self.batclant.set_value("riden", "set_output", output_ON)
 
-            # optional small delay for hardware to apply change
-            time.sleep(0.01)
+                # optional small delay for hardware to apply change
+                time.sleep(0.01)
 
-            # verify after change
-            new_state = self.batclant.get_value("riden", "is_output")
-            print("Updated output status:", new_state)
+                # verify after change
+                new_state = self.batclant.get_value("riden", "is_output")
+                print("Updated output status:", new_state)
 
-            return new_state
+                return new_state
 
-        return ride_out_state
+            return ride_out_state
+        except Exception as e:
+            self.riden_available = False
+            self.riden_last_error = str(e)
+            self.riden_last_error_time = time.time()
+            return None
 
     def initialize_values(self):
-        # Set Riden values
+        # Check Riden health first
+        print("Checking Riden availability...")
+        if self.check_riden_health():
+            print(f"{GREEN}Riden is available{RESET}")
+            # Set Riden values
+            try:
+                self.set_riden_out(output_ON= True)
+                self.batclant.set_value("riden", "set_v_set", self.set_v_set_initial)
+                print("V_SET:", self.batclant.get_value("riden", "get_v_set"))
+                print("V_OUT:", self.batclant.get_value("riden", "get_v_out"))
+                print("I_OUT:", self.batclant.get_value("riden", "get_i_out"))
+                print("P_OUT:", self.batclant.get_value("riden", "get_p_out"))
+            except Exception as e:
+                print(f"{YELLOW}Error initializing Riden values: {e}{RESET}")
+                self.riden_available = False
+        else:
+            print(f"{YELLOW}Riden is NOT available - will operate inverter independently{RESET}")
+        
+        # Set inverter power (always try)
         try:
-            self.set_riden_out(output_ON= True)
-            self.batclant.set_value("riden", "set_v_set", self.set_v_set_initial)
-            print("V_SET:", self.batclant.get_value("riden", "get_v_set"))
-            print("V_OUT:", self.batclant.get_value("riden", "get_v_out"))
-            print("I_OUT:", self.batclant.get_value("riden", "get_i_out"))
-            print("P_OUT:", self.batclant.get_value("riden", "get_p_out"))
-            # # Set and get inverter power
             self.batclant.set_value("inverter", "set_power", 0)
             print("Inverter power:", self.batclant.get_value("inverter", "get_power"))
         except Exception as e:
-            print(f"Error initializing Riden and inverter values: {e}")
+            print(f"Error initializing inverter: {e}")
 
 
     def print_status_line(self, 
@@ -166,7 +213,6 @@ class SMainBat:
             # Riden data
             add("rid", rid_P_out, rid_color)
             add("I", current, curr_color, fmt="{:.1f}")
-            add("V", v_out, fmt="{:.1f}")
             add("V", v_out, fmt="{:.1f}")
             add("Te", self.temp_ext_c, fmt="{:.0f}")
             add("Ti", self.temp_int_c, fmt="{:.0f}")
@@ -230,11 +276,22 @@ class SMainBat:
                 # ---------------------
                 # Device control
                 # ---------------------
-            try:
-                self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
-                self.temp_ext_c = self.batclant.get_value("riden", "get_ext_c")
-            except Exception as e:
-                print(f"{YELLOW}Warning: Failed to read temperatures: {e}{RESET}")    
+            # Check Riden health periodically (every 10 seconds)
+            now = time.time()
+            if now - self.last_riden_check >= self.riden_check_interval:
+                self.check_riden_health()
+                self.last_riden_check = now
+            
+            if self.riden_available:
+                try:
+                    self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
+                    self.temp_ext_c = self.batclant.get_value("riden", "get_ext_c")
+                except Exception as e:
+                    print(f"{YELLOW}Warning: Failed to read temperatures: {e}{RESET}")
+                    self.riden_available = False
+                    self.temp_ext_c = 0.0
+                    self.temp_int_c = 0.0
+            else:
                 self.temp_ext_c = 0.0
                 self.temp_int_c = 0.0
             
@@ -250,35 +307,54 @@ class SMainBat:
             if pid_power >= 0:
                     # Discharge via 2 inverters
                 double_inv_power = inv_power / 2
-                self.batclant.set_value( "inverter", "set_power", double_inv_power)  
-                #self.batclant.set_value( "inverter", "set_power", inv_power)
                 try:
-                    self.batclant.set_value( "riden","set_i_set", 0.0)
-                    status_on=self.batclant.get_value("riden", "is_output")
+                    self.batclant.set_value("inverter", "set_power", double_inv_power)
                 except Exception as e:
-                    print(f"{YELLOW}Warning: Failed to set Riden output or read status: {e}{RESET}")
-                    status_on=False
+                    print(f"{YELLOW}Warning: Failed to set inverter power: {e}{RESET}")
                 
-                if status_on:
-                    self.set_riden_out(output_ON= False)
+                # Only control Riden if available
+                if self.riden_available:
+                    try:
+                        self.batclant.set_value("riden", "set_i_set", 0.0)
+                        status_on=self.batclant.get_value("riden", "is_output")
+                        if status_on:
+                            self.set_riden_out(output_ON=False)
+                    except Exception as e:
+                        print(f"{YELLOW}Warning: Failed to control Riden: {e}{RESET}")
+                        self.riden_available = False
                     
             else:
-                    # Charge via Riden
-                self.batclant.set_value( "inverter", "set_power", 0)
-                self.batclant.set_value( "riden", "set_output", True)
-
-                v_out_val = self.batclant.get_value("riden", "get_v_out")
-                self.v_out = v_out_val if v_out_val not in (None, "") else 0.0
-                v_for_calc = self.v_out if self.v_out not in (None, 0) else self.set_v_set_initial
-
-                self.current = self.pid.PtoI( pid_power, v_for_calc,max_current=max_current_T)
-                p = self.batclant.get_value( "riden", "get_p_out")
-                self.rid_P_out = (p or 0.0) / 1000.0
-                try:    
-                    self.set_riden_out(output_ON= True)
-                    self.batclant.set_value( "riden","set_i_set", self.current)
+                    # Charge via Riden (if available) or standby (if not)
+                try:
+                    self.batclant.set_value("inverter", "set_power", 0)
                 except Exception as e:
-                    print(f"{YELLOW}Warning: Failed to set Riden output or current: {e}{RESET}")
+                    print(f"{YELLOW}Warning: Failed to set inverter power to 0: {e}{RESET}")
+                
+                if self.riden_available:
+                    try:
+                        self.batclant.set_value("riden", "set_output", True)
+                        v_out_val = self.batclant.get_value("riden", "get_v_out")
+                        self.v_out = v_out_val if v_out_val not in (None, "") else self.set_v_set_initial
+                        v_for_calc = self.v_out if self.v_out not in (None, 0) else self.set_v_set_initial
+
+                        self.current = self.pid.PtoI(pid_power, v_for_calc, max_current=max_current_T)
+                        p = self.batclant.get_value("riden", "get_p_out")
+                        self.rid_P_out = (p or 0.0) / 1000.0
+                        
+                        self.set_riden_out(output_ON=True)
+                        self.batclant.set_value("riden", "set_i_set", self.current)
+                    except Exception as e:
+                        print(f"{YELLOW}Warning: Failed to control Riden: {e}{RESET}")
+                        self.riden_available = False
+                        self.rid_P_out = 0.0
+                        self.current = 0.0
+                else:
+                    # Riden unavailable - use fallback values
+                    self.v_out = self.set_v_set_initial
+                    self.rid_P_out = 0.0
+                    self.current = 0.0
+                    if self.riden_error_count <= 1:
+                        print(f"{YELLOW}Riden unavailable - standby mode (error: {self.riden_last_error}){RESET}")
 
             
             return import_p,\

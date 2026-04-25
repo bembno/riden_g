@@ -113,7 +113,7 @@ class Batclant:
         threading.Thread(target=try_reconnect, daemon=True).start()
 
 
-    def set_value(self, device: str, function: str, value, timeout=1.0):
+    def set_value(self, device: str, function: str, value, timeout=1.5):
         """Set a value on a device (Riden or Inverter)."""
         resp = self._send_command(device, function, value=value, timeout=timeout)
         if resp.get("status") != "ok":
