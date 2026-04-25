@@ -62,11 +62,6 @@ class SMainBat:
         # Initialize database storage (optional)
         self.storage = None
         
-
-        #sw watchdog to ensure script restarts if it hangs for some reason (e.g. meter thread issues)
-        self.sw_watchdog = SoftwareWatchdog(timeout=60)
-        threading.Thread(target=self.sw_watchdog.run, daemon=True,name="SoftwareWatchdog").start()
-
         self.rid_P_out=0.0
         self.current=0.0
         self.v_out=0.0
@@ -82,8 +77,17 @@ class SMainBat:
         self.riden_last_error = None
         self.riden_last_error_time = None
         self.riden_error_count = 0
-        self.last_riden_check = 0
-        self.riden_check_interval = 10.0  # Check every 2 seconds
+        self.riden_check_interval = 10.0  # Background thread checks every 2 seconds
+
+        #sw watchdog to ensure script restarts if it hangs for some reason (e.g. meter thread issues)
+        self.sw_watchdog = SoftwareWatchdog(timeout=60)
+        threading.Thread(target=self.sw_watchdog.run, daemon=True,name="SoftwareWatchdog").start()
+
+        # Riden health monitoring (non-blocking background thread)
+        self.riden_monitor_alive = True
+        threading.Thread(target=self._monitor_riden_health, daemon=True, name="RidenHealthMonitor").start()
+
+
         try:
             self.storage = P1Storage(
                 host="192.168.2.33",
@@ -119,6 +123,21 @@ class SMainBat:
             self.riden_last_error = str(e)
             self.riden_last_error_time = time.time()
             return False
+
+    def _monitor_riden_health(self):
+        """Background thread: Continuously monitor Riden health without blocking main loop."""
+        print(f"{CYAN}[RidenHealthMonitor] Started - checking every {self.riden_check_interval}s{RESET}")
+        while self.riden_monitor_alive:
+            try:
+                self.check_riden_health()
+            except Exception as e:
+                print(f"{YELLOW}[RidenHealthMonitor] Unexpected error: {e}{RESET}")
+            
+            # Sleep in small increments to allow graceful shutdown
+            for _ in range(int(self.riden_check_interval * 10)):
+                if not self.riden_monitor_alive:
+                    break
+                time.sleep(0.1)
 
     def set_riden_out(self, output_ON=True):
         # read current state first
@@ -276,12 +295,7 @@ class SMainBat:
                 # ---------------------
                 # Device control
                 # ---------------------
-            # Check Riden health periodically (every 10 seconds)
-            now = time.time()
-            if now - self.last_riden_check >= self.riden_check_interval:
-                self.check_riden_health()
-                self.last_riden_check = now
-            
+                        
             if self.riden_available:
                 try:
                     self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
@@ -395,6 +409,13 @@ class SMainBat:
     def cleanup(self):
         """Clean up resources"""
         try:
+            # Stop background threads
+            self.riden_monitor_alive = False
+            self.sw_watchdog.alive = False
+            
+            # Wait a bit for threads to finish
+            time.sleep(0.2)
+            
             self.batclant.close()
             if self.storage is not None:
                 self.storage.close()

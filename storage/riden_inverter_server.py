@@ -171,8 +171,8 @@ class DeviceServer:
 
         if action == "get_power":
             if self.inverter is not None:
-                power = self.inverter.GetCurrentPower()
-                print(f"Got inverter power: {power}")  # Debug
+                power = self.inverter.GetLastSentPower()
+                print(f"Got last sent inverter power: {power}")  # Debug
                 return {"status": "ok", "device": "inverter", "result": power}
             else:
                 print("Inverter connection failed")  # Debug
