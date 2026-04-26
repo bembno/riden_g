@@ -60,8 +60,10 @@ class SMainBat:
     def __init__(self):
         self.meter = Meter().start()  # Start the meter thread immediately
         self.batclant = Batclant()
-        self.set_v_set_initial=58.0
-        self.pid = PIDController(kp=2.5, ki=0.05, kd=0.05, setpoint=0.0, max_change_ratio=1.0)
+        self.Vmax_bat=58.0
+        self.vmin_bat=46.0
+        
+        self.pid = PIDController(kp=2.5, ki=0.05, kd=0.05,Vmin=self.vmin_bat, Vmax=self.Vmax_bat, setpoint=0.0, max_change_ratio=1.0)
         
         if not self.meter.wait_until_ready(timeout=1):
                     print("Warning: meter did not become ready within 5 seconds")
@@ -181,7 +183,7 @@ class SMainBat:
             # Set Riden values
             try:
                 self.set_riden_out(output_ON= True)
-                self.batclant.set_value("riden", "set_v_set", self.set_v_set_initial)
+                self.batclant.set_value("riden", "set_v_set", self.Vmax_bat)
                 print("V_SET:", self.batclant.get_value("riden", "get_v_set"))
                 print("V_OUT:", self.batclant.get_value("riden", "get_v_out"))
                 print("I_OUT:", self.batclant.get_value("riden", "get_i_out"))
@@ -283,7 +285,7 @@ class SMainBat:
                 power_diff = 0.0
 
 
-            pid_power = self.pid.adjustPower(power_diff,min_output=self.min_output, max_output=self.max_output) or 0.0
+            pid_power = self.pid.adjustPower(power_diff,voltage=self.v_out, min_output=self.min_output, max_output=self.max_output) or 0.0
             inv_power = max(0, round(pid_power * 1000))
 
             self.print_status_line(
@@ -315,11 +317,11 @@ class SMainBat:
                     self.riden_available = False
                     self.temp_ext_c = 0.0
                     self.temp_int_c = 0.0
-                    self.v_out= self.set_v_set_initial
+                    self.v_out= self.Vmax_bat
             else:
                 self.temp_ext_c = 0.0
                 self.temp_int_c = 0.0
-                self.v_out= self.set_v_set_initial
+                self.v_out= self.Vmax_bat
             
             if self.temp_ext_c>self.temp_max_allowed:
                 print(f"{YELLOW}Warning: Riden external temperature high: {self.temp_ext_c}C{RESET}")
@@ -364,8 +366,8 @@ class SMainBat:
                     try:
                         self.batclant.set_value("riden", "set_output", True)
                         v_out_val = self.batclant.get_value("riden", "get_v_out")
-                        self.v_out = v_out_val if v_out_val not in (None, "") else self.set_v_set_initial
-                        v_for_calc = self.v_out if self.v_out not in (None, 0) else self.set_v_set_initial
+                        self.v_out = v_out_val if v_out_val not in (None, "") else self.Vmax_bat
+                        v_for_calc = self.v_out if self.v_out not in (None, 0) else self.Vmax_bat
 
                         self.current = self.pid.PtoI(pid_power, v_for_calc, max_current=max_current_T)
                         p = self.batclant.get_value("riden", "get_p_out")
@@ -380,7 +382,7 @@ class SMainBat:
                         self.current = 0.0
                 else:
                     # Riden unavailable - use fallback values
-                    self.v_out = self.set_v_set_initial
+                    self.v_out = self.Vmax_bat
                     self.rid_P_out = 0.0
                     #self.current = 0.0
                     if self.riden_error_count <= 1:

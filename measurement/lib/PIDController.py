@@ -2,11 +2,14 @@ import time
 
 
 class PIDController:
-    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0, max_change_ratio=0.1):
+    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0,Vmin=46.0, Vmax=57.6, max_change_ratio=0.1):
         self.kp = kp
         self.ki = ki
         self.kd = kd
         self.setpoint = setpoint
+        self.Vmin = Vmin
+        self.Vmax = Vmax
+        self.rounding_V=2
 
         # max output change per step (0.1 = 10% of full range)
         self.max_change_ratio = max_change_ratio
@@ -19,7 +22,24 @@ class PIDController:
         # optional default voltage (used in PtoI)
         self.set_v_set_initial = 0
 
-    def adjustPower(self, measured_value, min_output=-1.8, filter_coef=0.1, max_output=0.9):
+    def _roundingPowerEdges(self, Power,Voltage):
+        coeff=1.0
+
+        if (Voltage +self.rounding_V)> self.Vmax:
+            coeff=(self.Vmax-Voltage)/self.rounding_V
+            print(f"Rounding down power at high voltage edge: coeff={coeff:.2f}")
+            
+        if (Voltage -self.rounding_V)< self.Vmin:
+            coeff=(Voltage-self.Vmin)/self.rounding_V
+            print(f"Rounding down power at low voltage edge: coeff={coeff:.2f}")
+        
+        rounded_Power = Power*coeff   
+        return rounded_Power
+
+
+
+
+    def adjustPower(self, measured_value,voltage, min_output=-1.8, filter_coef=0.1, max_output=1.8):
         """
         Stable PID controller with:
         - derivative on measurement (no kick)
@@ -62,6 +82,7 @@ class PIDController:
             self.ki * self.integral +
             self.kd * derivative
         )
+        output = self._roundingPowerEdges(output,voltage)
 
         # --- Clamp output ---
         output = max(min(output, max_output), min_output)
