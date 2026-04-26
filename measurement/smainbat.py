@@ -61,7 +61,7 @@ class SMainBat:
         self.meter = Meter().start()  # Start the meter thread immediately
         self.batclant = Batclant()
         self.set_v_set_initial=58.0
-        self.pid = PIDController(kp=0.05, ki=0.1, kd=0.05, setpoint=0.0, max_change_ratio=0.1)
+        self.pid = PIDController(kp=2.5, ki=0.05, kd=0.05, setpoint=0.0, max_change_ratio=1.0)
         
         if not self.meter.wait_until_ready(timeout=1):
                     print("Warning: meter did not become ready within 5 seconds")
