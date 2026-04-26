@@ -219,7 +219,7 @@ class SMainBat:
             inv_color    = YELLOW if war_power > 0.01 else RESET
             rid_color    = BRIGHT_GREEN if rid_P_out > 0.01 else RESET
             curr_color   = BRIGHT_GREEN if current > 0.01 else RESET
-
+            curr_color   = YELLOW if war_power > 0.01 else RESET
             # Base values
             add("i", import_p, BLUE)
             add("e", export_p, export_color)
@@ -306,14 +306,20 @@ class SMainBat:
                 try:
                     self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
                     self.temp_ext_c = self.batclant.get_value("riden", "get_ext_c")
+                    self.v_out = self.batclant.get_value("riden", "get_v_out")
+                    #self.set_riden_out(output_ON=True)  # Ensure Riden output is ON if available
+                    #print(f"Riden temperatures: int={self.temp_int_c}C, ext={self.temp_ext_c}C, V_out={self.v_out}V")
+                    
                 except Exception as e:
                     print(f"{YELLOW}Warning: Failed to read temperatures: {e}{RESET}")
                     self.riden_available = False
                     self.temp_ext_c = 0.0
                     self.temp_int_c = 0.0
+                    self.v_out= self.set_v_set_initial
             else:
                 self.temp_ext_c = 0.0
                 self.temp_int_c = 0.0
+                self.v_out= self.set_v_set_initial
             
             if self.temp_ext_c>self.temp_max_allowed:
                 print(f"{YELLOW}Warning: Riden external temperature high: {self.temp_ext_c}C{RESET}")
@@ -327,6 +333,9 @@ class SMainBat:
             if pid_power >= 0:
                     # Discharge via 2 inverters
                 double_inv_power = inv_power / 2
+                if self.v_out is not None and self.v_out != 0:
+                    self.current= double_inv_power/self.v_out
+                    
                 try:
                     self.batclant.set_value("inverter", "set_power", double_inv_power)
                 except Exception as e:
@@ -336,9 +345,10 @@ class SMainBat:
                 if self.riden_available:
                     try:
                         self.batclant.set_value("riden", "set_i_set", 0.0)
-                        status_on=self.batclant.get_value("riden", "is_output")
-                        if status_on:
-                            self.set_riden_out(output_ON=False)
+                        # dont chek keep olways on
+                        #status_on=self.batclant.get_value("riden", "is_output")
+                        #if status_on:
+                        #    self.set_riden_out(output_ON=False)
                     except Exception as e:
                         print(f"{YELLOW}Warning: Failed to control Riden: {e}{RESET}")
                         self.riden_available = False
@@ -372,7 +382,7 @@ class SMainBat:
                     # Riden unavailable - use fallback values
                     self.v_out = self.set_v_set_initial
                     self.rid_P_out = 0.0
-                    self.current = 0.0
+                    #self.current = 0.0
                     if self.riden_error_count <= 1:
                         print(f"{YELLOW}Riden unavailable - standby mode (error: {self.riden_last_error}){RESET}")
 
