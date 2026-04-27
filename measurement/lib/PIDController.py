@@ -9,7 +9,7 @@ class PIDController:
         self.setpoint = setpoint
         self.Vmin = Vmin
         self.Vmax = Vmax
-        self.rounding_V=2
+        self.rounding_V=3.0 #valye from which reduction due to battery capacity starts to apply. This is to prevent overloading the battery at high SoC when voltage is high. The value is in volts and can be adjusted based on the specific battery characteristics.
 
         # max output change per step (0.1 = 10% of full range)
         self.max_change_ratio = max_change_ratio
@@ -24,16 +24,22 @@ class PIDController:
 
     def _roundingPowerEdges(self, Power,Voltage):
         coeff=1.0
+        rounded_Power = Power*coeff
 
-        if (Voltage +self.rounding_V)> self.Vmax:
-            coeff=(self.Vmax-Voltage)/self.rounding_V
-            print(f"Rounding down power at high voltage edge: coeff={coeff:.2f}")
+        if (Power<0 )and ((Voltage +self.rounding_V)> self.Vmax):
+            coeff=abs(self.Vmax-Voltage)/self.rounding_V
+            coeff = max(0.0, min(1.0, coeff))
+            #rounded_Power = Power*coeff
+            #print(f"Rounding down power at high voltage edge: coeff={coeff:.2f}")
             
-        if (Voltage -self.rounding_V)< self.Vmin:
-            coeff=(Voltage-self.Vmin)/self.rounding_V
-            print(f"Rounding down power at low voltage edge: coeff={coeff:.2f}")
-        
-        rounded_Power = Power*coeff   
+        if (Power>=0 )and ((Voltage -self.rounding_V)< self.Vmin):
+            coeff=abs(Voltage-self.Vmin)/self.rounding_V
+            coeff = max(0.0, min(1.0, coeff))
+
+        if coeff!=1.0:    
+            rounded_Power = Power*coeff
+            print(f"Rounding down power at {Voltage:.2f} voltage: coeff={coeff:.2f}, Power={Power:.2f} -> {rounded_Power:.2f}")
+                  
         return rounded_Power
 
 
@@ -64,7 +70,7 @@ class PIDController:
         error = filtered_measured_value - self.setpoint
 
         # --- Integral ---
-        #self.integral += error * dt
+        
         # Only integrate if NOT saturating in same direction
         if not ((self.last_output >= max_output and error > 0) or
                 (self.last_output <= min_output and error < 0)):

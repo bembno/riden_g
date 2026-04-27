@@ -60,7 +60,7 @@ class SMainBat:
     def __init__(self):
         self.meter = Meter().start()  # Start the meter thread immediately
         self.batclant = Batclant()
-        self.Vmax_bat=58.0
+        self.Vmax_bat=57.5
         self.vmin_bat=46.0
         
         self.pid = PIDController(kp=2.5, ki=0.05, kd=0.05,Vmin=self.vmin_bat, Vmax=self.Vmax_bat, setpoint=0.0, max_change_ratio=1.0)
