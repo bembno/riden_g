@@ -230,10 +230,18 @@ class DeviceServer:
             self.last_client_msg = time.time()  # Update watchdog timestamp
             payload = json.loads(msg.payload.decode())
             print("CMD:", payload)
+            request_id = payload.get("request_id")
             out = self.handle_command(payload)
+            if request_id is not None:
+                out["request_id"] = request_id
             client.publish(TOPIC_RESP, json.dumps(out))
         except Exception as e:
-            client.publish(TOPIC_RESP, json.dumps({"status": "error", "message": str(e)}))
+            payload = json.loads(msg.payload.decode()) if msg.payload else {}
+            request_id = payload.get("request_id") if isinstance(payload, dict) else None
+            error_out = {"status": "error", "message": str(e)}
+            if request_id is not None:
+                error_out["request_id"] = request_id
+            client.publish(TOPIC_RESP, json.dumps(error_out))
 
     # ------------------------------------------------------------
     # MAIN START

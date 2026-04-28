@@ -1,6 +1,7 @@
 import json
 import time
 import threading
+import uuid
 import paho.mqtt.client as mqtt
 
 
@@ -16,6 +17,8 @@ class Batclant:
         self.last_response = None
         self.connected = False 
         self._response_lock = threading.Lock()
+        self._send_lock = threading.Lock()
+        self._pending_request_id = None
         self.client.on_message = self._on_message
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
@@ -48,8 +51,10 @@ class Batclant:
         except Exception as e:
             response = {"status": "error", "message": f"Invalid JSON: {e}"}
 
+        request_id = response.get("request_id")
         with self._response_lock:
-            self.last_response = response
+            if request_id is None or request_id == self._pending_request_id:
+                self.last_response = response
     
     def _restart_mqtt(self):
         try:
@@ -74,27 +79,34 @@ class Batclant:
     # Generic send
     # ----------------------------
     def _send_command(self, device, function, value=None, timeout=1.0):
-        cmd = {"device": device, "action": function}
+        request_id = uuid.uuid4().hex
+        cmd = {"device": device, "action": function, "request_id": request_id}
         if value is not None:
             cmd["value"] = value
 
-        with self._response_lock:
-            self.last_response = None
-
-        self.client.publish(self.topic_cmd, json.dumps(cmd))
-
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        with self._send_lock:
             with self._response_lock:
-                response = self.last_response
-            if response is not None:
-                return response
-            time.sleep(0.05)
+                self.last_response = None
+                self._pending_request_id = request_id
 
-        return {
-            "status": "error",
-            "message": f"Timeout waiting for response to {device}.{function}",
-        }
+            self.client.publish(self.topic_cmd, json.dumps(cmd))
+
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                with self._response_lock:
+                    response = self.last_response
+                if response is not None:
+                    return response
+                time.sleep(0.05)
+
+            with self._response_lock:
+                self._pending_request_id = None
+
+            return {
+                "status": "error",
+                "message": f"Timeout waiting for response to {device}.{function}",
+                "request_id": request_id,
+            }
     
     
     def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
@@ -113,14 +125,14 @@ class Batclant:
         threading.Thread(target=try_reconnect, daemon=True).start()
 
 
-    def set_value(self, device: str, function: str, value, timeout=1):
+    def set_value(self, device: str, function: str, value, timeout=2):
         """Set a value on a device (Riden or Inverter)."""
         resp = self._send_command(device, function, value=value, timeout=timeout)
         if resp.get("status") != "ok":
             raise RuntimeError(f"Failed to set {device}.{function}: {resp.get('message')}")
         return resp.get("result")
 
-    def get_value(self, device: str, function: str, timeout=1.0):
+    def get_value(self, device: str, function: str, timeout=2.0):
         """Get a value from a device. Returns the 'result' directly."""
         resp = self._send_command(device, function, value=None, timeout=timeout)
         if resp.get("status") != "ok":
