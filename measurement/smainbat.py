@@ -222,6 +222,7 @@ class SMainBat:
             rid_color    = BRIGHT_GREEN if rid_P_out > 0.01 else RESET
             curr_color   = BRIGHT_GREEN if current > 0.01 else RESET
             curr_color   = YELLOW if war_power > 0.01 else RESET
+            vout_color    = BRIGHT_WHITE if v_out == self.Vmax_bat else RESET
             # Base values
             add("i", import_p, BLUE)
             add("e", export_p, export_color)
@@ -240,7 +241,7 @@ class SMainBat:
             # Riden data
             add("rid", rid_P_out, rid_color)
             add("I", current, curr_color, fmt="{:.1f}")
-            add("V", v_out, fmt="{:.1f}")
+            add("V", v_out,vout_color, fmt="{:.1f}")
             add("Te", self.temp_ext_c, fmt="{:.0f}")
             add("Ti", self.temp_int_c, fmt="{:.0f}")
             print(" ".join(parts))
@@ -276,40 +277,16 @@ class SMainBat:
     def main_loop(self):
 
         try:
+            #get data from metter P1
             import_p, export_p, L1, L2, L3 = (self.meter.get_power() + [0.0] * 8)[:5]
-                # ---------------------
-                # PID calculation
-                # ---------------------
-            power_diff = import_p - export_p-0.02 - P_adding
-            if abs(power_diff) < 0.02:
-                power_diff = 0.0
-
-
-            pid_power = self.pid.adjustPower(power_diff,voltage=self.v_out, min_output=self.min_output, max_output=self.max_output) or 0.0
-            inv_power = max(0, round(pid_power * 1000))
-
-            self.print_status_line(
-                import_p=import_p,
-                export_p=export_p,
-                power_diff=power_diff,
-                pid_power=pid_power,
-                L1=L1,
-                L2=L2,
-                L3=L3,
-                war_power=inv_power,
-                rid_P_out=self.rid_P_out,
-                current=self.current,
-                v_out=self.v_out    )
-                # ---------------------
-                # Device control
-                # ---------------------
-                        
+            #get data from riden
             if self.riden_available:
                 try:
                     self.temp_int_c = self.batclant.get_value("riden", "get_int_c")
                     self.temp_ext_c = self.batclant.get_value("riden", "get_ext_c")
+                    self.set_riden_out(output_ON=True)  # Ensure Riden output is ON if available
                     self.v_out = self.batclant.get_value("riden", "get_v_out")
-                    #self.set_riden_out(output_ON=True)  # Ensure Riden output is ON if available
+                                      
                     #print(f"Riden temperatures: int={self.temp_int_c}C, ext={self.temp_ext_c}C, V_out={self.v_out}V")
                     
                 except Exception as e:
@@ -322,7 +299,9 @@ class SMainBat:
                 self.temp_ext_c = 0.0
                 self.temp_int_c = 0.0
                 self.v_out= self.Vmax_bat
+
             
+            # Adjust max current and min output based on riden temperature
             if self.temp_ext_c>self.temp_max_allowed:
                 print(f"{YELLOW}Warning: Riden external temperature high: {self.temp_ext_c}C{RESET}")
                 max_current_T=30.0
@@ -332,6 +311,17 @@ class SMainBat:
                 self.min_output=-1.8
 
 
+                # ---------------------
+                # PID calculation
+                # ---------------------
+            power_diff = import_p - export_p-0.02 - P_adding
+            if abs(power_diff) < 0.02:
+                power_diff = 0.0
+
+            pid_power = self.pid.adjustPower(power_diff,voltage=self.v_out, min_output=self.min_output, max_output=self.max_output) or 0.0
+            inv_power = max(0, round(pid_power * 1000))
+
+            #execute changes to inverter and Riden based on PID output
             if pid_power >= 0:
                     # Discharge via 2 inverters
                 double_inv_power = inv_power / 2
@@ -387,7 +377,19 @@ class SMainBat:
                     #self.current = 0.0
                     if self.riden_error_count <= 1:
                         print(f"{YELLOW}Riden unavailable - standby mode (error: {self.riden_last_error}){RESET}")
-
+            
+            self.print_status_line(
+                import_p=import_p,
+                export_p=export_p,
+                power_diff=power_diff,
+                pid_power=pid_power,
+                L1=L1,
+                L2=L2,
+                L3=L3,
+                war_power=inv_power,
+                rid_P_out=self.rid_P_out,
+                current=self.current,
+                v_out=self.v_out    )
             
             return import_p,\
                     export_p,\
