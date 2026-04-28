@@ -230,9 +230,9 @@ class SMainBat:
             add("pid", pid_power, CYAN)
 
             # Phases
-            add("L1", L1)
-            add("L2", L2)
-            add("L3", L3)
+            #add("L1", L1)
+           # add("L2", L2)
+           # add("L3", L3)
 
             # Inverter power (integer watts)
             if war_power:

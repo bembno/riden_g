@@ -85,32 +85,33 @@ class DeviceServer:
         """Proactively monitor and reconnect devices in the background."""
         print("Device monitor active...")
         while True:
+            # Check if charger needs reconnect (with lock held only briefly)
+            charger_needs_reconnect = False
             with self.lock:
-                # Monitor charger
                 if self.charger is None or not self.charger.is_connected():
-                    print("Charger not connected, attempting reconnect...")
-                    try:
-                        if self.charger:
-                            self.charger.reconnect()
-                            # Test responsiveness after reconnect
-                            test = self.charger.read(0, 1)
-                            if test is None:
-                                raise Exception("Reconnected device not responsive")
-                        else:
-                            # Try fresh connection
-                            temp_charger = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)
-                            # Test responsiveness
-                            test = temp_charger.read(0, 1)
-                            if test is None:
-                                raise Exception("Reconnected device not responsive")
-                            self.charger = temp_charger
-                        if self.charger and self.charger.is_connected():
-                            self.charger_required = True
-                            print("Charger reconnected successfully.")
-                    except Exception as e:
-                        print(f"Charger reconnect failed: {e}")
-                        self.charger = None  # Ensure it's None if test failed
-                # Optionally add similar checks for inverter/pindriver if needed
+                    charger_needs_reconnect = True
+            
+            # Do the actual I/O outside the lock to avoid blocking command handler
+            if charger_needs_reconnect:
+                print("Charger not connected, attempting reconnect...")
+                try:
+                    # Try fresh connection (outside lock)
+                    temp_charger = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)
+                    # Test responsiveness
+                    test = temp_charger.read(0, 1)
+                    if test is None:
+                        raise Exception("Reconnected device not responsive")
+                    
+                    # Update state while holding lock
+                    with self.lock:
+                        self.charger = temp_charger
+                        self.charger_required = True
+                    print("Charger reconnected successfully.")
+                except Exception as e:
+                    print(f"Charger reconnect failed: {e}")
+                    with self.lock:
+                        self.charger = None
+            
             time.sleep(10)  # Check every 10 seconds (adjust as needed)
 
     # ------------------------------------------------------------
