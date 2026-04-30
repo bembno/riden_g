@@ -22,30 +22,8 @@ class PIDController:
         # optional default voltage (used in PtoI)
         self.set_v_set_initial = 0
 
-    def _roundingPowerEdges(self, Power,Voltage):
-        coeff=1.0
-        rounded_Power = Power*coeff
 
-        if (Power<0 )and ((Voltage +self.rounding_V)> self.Vmax):
-            coeff=abs(self.Vmax-Voltage)/self.rounding_V
-            coeff = max(0.0, min(1.0, coeff))
-            #rounded_Power = Power*coeff
-            #print(f"Rounding down power at high voltage edge: coeff={coeff:.2f}")
-            
-        if (Power>=0 )and ((Voltage -self.rounding_V)< self.Vmin):
-            coeff=abs(Voltage-self.Vmin)/self.rounding_V
-            coeff = max(0.0, min(1.0, coeff))
-
-        if coeff!=1.0:    
-            rounded_Power = Power*coeff
-            print(f"Rounding down power at {Voltage:.2f} voltage: coeff={coeff:.2f}, Power={Power:.2f} -> {rounded_Power:.2f}")
-                  
-        return rounded_Power
-
-
-
-
-    def adjustPower(self, measured_value,voltage, min_output=-1.8, filter_coef=0.1, max_output=1.8):
+    def adjustPower(self, measured_value, min_output=-1.8, filter_coef=0.1, max_output=1.8):
         """
         Stable PID controller with:
         - derivative on measurement (no kick)
@@ -88,7 +66,7 @@ class PIDController:
             self.ki * self.integral +
             self.kd * derivative
         )
-        output = self._roundingPowerEdges(output,voltage)
+        
 
         # --- Clamp output ---
         output = max(min(output, max_output), min_output)
