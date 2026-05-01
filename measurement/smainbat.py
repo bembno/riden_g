@@ -250,7 +250,7 @@ class SMainBat:
                     # Discharge via 2 inverters
                 double_inv_power = inv_power / 2
                 if self.v_out is not None and self.v_out != 0:
-                    self.current= double_inv_power/self.v_out
+                    self.current= inv_power/self.v_out
                     
                 try:
                     self.batclant.set_value("inverter", "set_power", double_inv_power)
