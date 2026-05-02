@@ -299,6 +299,12 @@ class Riden:
         _cv_cc = _cv_cc or self.read(R.CV_CC)
         self.cv_cc = "CV" if _cv_cc == 0 else "CC" if _cv_cc == 1 else None
         return self.cv_cc
+    
+    def set_cv_cc(self, mode: str | int) -> int:
+        if isinstance(mode, str):
+            mode = 0 if mode.upper() == "CV" else 1
+        self.cv_cc = "CV" if mode == 0 else "CC"
+        return self.write(R.CV_CC, int(mode))
 
     def is_output(self, _output: int = None) -> bool:
         self.output = bool(_output or self.read(R.OUTPUT))
@@ -352,12 +358,12 @@ class Riden:
         self.wh = (_wh_h << 16 | _wh_l) / 1000
         return self.wh
 
-    def get_date_time(self) -> datetime:
+    def get_date_time(self) -> str:
         if self.type == "RK6006":
-            return
+            return None
         d = self.read(R.YEAR, 6)
         self.datetime = datetime(d[0], d[1], d[2], d[3], d[4], d[5])
-        return self.datetime
+        return self.datetime.isoformat()
 
     def set_date_time(self, d: datetime) -> int:
         return self.write_multiple(

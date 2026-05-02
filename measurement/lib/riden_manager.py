@@ -114,6 +114,8 @@ class RidenManager:
     # ---------------------------
     # STATUS
     # ---------------------------
+
+
     def get_full_status(self):
         """Update all internal state variables."""
         if not self.available:
@@ -146,6 +148,7 @@ class RidenManager:
                 "ah": self.ah,
                 "wh": self.wh,
             }
+            
 
             return True
 
@@ -155,8 +158,6 @@ class RidenManager:
             self.last_error_time = time.time()
             return False
 
-    def update_status(self):
-        return self.get_full_status()
 
     # ---------------------------
     # INIT
@@ -166,15 +167,18 @@ class RidenManager:
             return False
 
         try:
-            self.set_output(True)
+            self.get_full_status()
+            print("Updated Riden status:", self.status)
+
+            if not self.output:
+                self.set_output(True)
+           
             self.batclant.set_value("riden", "set_v_set", self.Vmax_bat)
+            #cv -0 cc -1
+            self.batclant.set_value("riden", "set_cv_cc", 0)
 
-            self.update_status()
-
-            print("V_SET:", self.batclant.get_value("riden", "get_v_set"))
-            print("V_OUT:", self.v_out)
-            print("I_OUT:", self.i_out)
-            print("P_OUT:", self.p_out)
+            self.get_full_status()
+            print("Updated Riden status:", self.status)
 
             return True
 

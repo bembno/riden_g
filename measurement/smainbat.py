@@ -206,13 +206,16 @@ class SMainBat:
             # get data from riden
             if self.riden.available:
                 try:
-                    self.riden.update_status()
-                    status = self.riden.status
-                    self.temp_int_c = status.get("temp_int", 0.0)
-                    self.temp_ext_c = status.get("temp_ext", 0.0)
-                    self.v_out = status.get("v_out", self.Vmax_bat)
-                    self.rid_P_out = (status.get("p_out") or 0.0) / 1000.0
-                    self.riden.set_output(output_on=True)
+                    self.riden.get_full_status()
+                   
+                    self.temp_int_c = self.riden.temp_int
+                    self.temp_ext_c = self.riden.temp_ext
+                    self.v_out      = self.riden.v_out
+                    
+                    self.rid_P_out  = (self.riden.p_out or 0.0) / 1000.0
+                    if not self.riden.output:
+                            self.riden.set_output(True)
+
                 except Exception as e:
                     print(f"{YELLOW}Warning: Failed to read Riden status: {e}{RESET}")
                     self.riden.available = False
@@ -261,10 +264,7 @@ class SMainBat:
                 if self.riden.available:
                     try:
                         self.batclant.set_value("riden", "set_i_set", 0.0)
-                        # dont chek keep olways on
-                        #status_on=self.batclant.get_value("riden", "is_output")
-                        #if status_on:
-                        #    self.set_riden_out(output_ON=False)
+
                     except Exception as e:
                         print(f"{YELLOW}Warning: Failed to control Riden: {e}{RESET}")
                         self.riden.available = False
@@ -278,17 +278,26 @@ class SMainBat:
                 
                 if self.riden.available:
                     try:
-                        self.batclant.set_value("riden", "set_output", True)
-                        v_out_val = self.batclant.get_value("riden", "get_v_out")
-                        self.v_out = v_out_val if v_out_val not in (None, "") else self.Vmax_bat
+                        if not self.riden.output:
+                            self.riden.set_output(True)
+
+                        self.v_out = self.riden.v_out or self.Vmax_bat
+
                         v_for_calc = self.v_out if self.v_out not in (None, 0) else self.Vmax_bat
 
                         self.current = self.pid.PtoI(pid_power, v_for_calc, max_current=max_current_T)
-                        p = self.riden.status.get("p_out", 0.0)
-                        self.rid_P_out = (p or 0.0) / 1000.0
+
+                        #v_set_out = self.pid.PtoU(pid_power,self.current)
                         
-                        self.riden.set_output(output_on=True)
+                        #print(f"Voltage setpoint: {v_set_out:.1f} V | self.riden.v_out: {self.riden.v_out:.1f} V | Current riden: {self.riden.i_out:.1f} A |")
+
+                        self.rid_P_out = (self.riden.p_out or 0.0) / 1000.0
                         self.batclant.set_value("riden", "set_i_set", self.current)
+
+                    
+
+                        
+
                     except Exception as e:
                         print(f"{YELLOW}Warning: Failed to control Riden: {e}{RESET}")
                         self.riden.available = False

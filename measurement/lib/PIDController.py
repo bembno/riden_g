@@ -109,3 +109,13 @@ class PIDController:
         safe_current = round(min(current, max_current), 3)
 
         return safe_current
+    
+    def PtoU(self, power_kwatts, Current=30):
+        """
+        Convert power (kW) to Voltage (V)
+        """
+
+        voltage = abs(power_kwatts * 1000 / Current)
+        safe_voltage = round(min(voltage, self.Vmax), 3)
+
+        return safe_voltage
