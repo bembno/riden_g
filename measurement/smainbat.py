@@ -287,11 +287,19 @@ class SMainBat:
 
                         self.current = self.pid.PtoI(pid_power, v_for_calc, max_current=max_current_T)
 
-                        #v_set_out = self.pid.PtoU(pid_power,self.current)
-                        
-                        #print(f"Voltage setpoint: {v_set_out:.1f} V | self.riden.v_out: {self.riden.v_out:.1f} V | Current riden: {self.riden.i_out:.1f} A |")
 
-                        self.rid_P_out = (self.riden.p_out or 0.0) / 1000.0
+                        # Apply tapering based on battery voltage
+                        self.current, taper_factor = self.pid.limit_current_with_taper(
+                            self.current,
+                            self.v_out,
+                            self.max_current
+                        )
+
+                        if taper_factor < 1.0:
+                            print(f"Taper factor: {taper_factor:.2f} | Current: {self.current:.2f} A | V: {self.v_out:.2f} V")
+
+
+                        #self.rid_P_out = (self.riden.p_out or 0.0) / 1000.0
                         self.batclant.set_value("riden", "set_i_set", self.current)
 
                     

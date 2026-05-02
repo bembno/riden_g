@@ -9,8 +9,7 @@ class PIDController:
         self.setpoint = setpoint
         self.Vmin = Vmin
         self.Vmax = Vmax
-        self.rounding_V=3.0 #valye from which reduction due to battery capacity starts to apply. This is to prevent overloading the battery at high SoC when voltage is high. The value is in volts and can be adjusted based on the specific battery characteristics.
-
+  
         # max output change per step (0.1 = 10% of full range)
         self.max_change_ratio = max_change_ratio
 
@@ -21,6 +20,13 @@ class PIDController:
 
         # optional default voltage (used in PtoI)
         self.set_v_set_initial = 0
+
+        # -------------------------
+        # TAPER SETTINGS (NEW)
+        # -------------------------
+        self.taper_start_offset = 2.5   # start taper before Vmax
+        self.taper_min_factor = 0.05
+        self.taper_power = 1.5
 
 
     def adjustPower(self, measured_value, min_output=-1.8, filter_coef=0.1, max_output=1.8):
@@ -119,3 +125,48 @@ class PIDController:
         safe_voltage = round(min(voltage, self.Vmax), 3)
 
         return safe_voltage
+    
+    def voltage_taper(self, voltage):
+        """
+        Returns taper factor (0.0 - 1.0) based on battery voltage.
+        Smoothly reduces current near full charge.
+        """
+
+        if voltage is None:
+            return 1.0
+
+        taper_start = self.Vmax - self.taper_start_offset
+
+        if voltage <= taper_start:
+            return 1.0
+
+        # normalize 0..1
+        raw = (self.Vmax - voltage) / (self.Vmax - taper_start)
+
+        # clamp
+        raw = max(0.0, min(1.0, raw))
+
+        # smooth curve (important for stability)
+        factor = raw ** self.taper_power
+
+        return max(self.taper_min_factor, factor)
+    
+    def limit_current_with_taper(self, current, voltage, max_current):
+        """
+        Applies:
+        - max current limit
+        - voltage tapering
+        - safety minimum current clamp
+        """
+
+        # base clamp
+        current = min(current, max_current)
+
+        # taper
+        factor = self.voltage_taper(voltage)
+        current *= factor
+
+        # final safety clamp
+        current = max(0.0, current)
+
+        return current, factor
