@@ -28,6 +28,10 @@ class PIDController:
         self.taper_min_factor = 0.05
         self.taper_power = 1.5
 
+        self.max_v_counter = 0
+        self.max_v_limit = 10
+        self.max_v_threshold = 0.99  # 99% of Vmax
+
 
     def adjustPower(self, measured_value, min_output=-1.8, filter_coef=0.1, max_output=1.8):
         """
@@ -170,3 +174,34 @@ class PIDController:
         current = max(0.0, current)
 
         return current, factor
+    
+
+    def check_and_reset_if_stuck_at_max_v(self, voltage):
+        """
+        Detects if battery is stuck at max voltage for too long.
+        If yes → resets PID integral state.
+        """
+
+        if voltage is None:
+            return False
+
+        if voltage >= self.Vmax * self.max_v_threshold:
+            self.max_v_counter += 1
+        else:
+            self.max_v_counter = 0
+
+        if self.max_v_counter >= self.max_v_limit:
+            self.reset()
+            print("PID RESET → battery stuck at max voltage")
+            self.max_v_counter = 0
+            return True
+
+        return False
+    def reset(self):
+        """
+        Fully resets PID internal state.
+        """
+        self.integral = 0.0
+        self.last_time = None
+        self.last_output = 0.0
+        self.last_measured = 0.0

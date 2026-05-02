@@ -213,6 +213,7 @@ class SMainBat:
                     self.v_out      = self.riden.v_out
                     
                     self.rid_P_out  = (self.riden.p_out or 0.0) / 1000.0
+                    
                     if not self.riden.output:
                             self.riden.set_output(True)
 
@@ -241,6 +242,11 @@ class SMainBat:
                 # ---------------------
                 # PID calculation
                 # ---------------------
+
+            # Check if battery is stuck at max voltage and reset PID if needed
+            self.pid.check_and_reset_if_stuck_at_max_v(self.riden.v_out)  
+
+
             power_diff = import_p - export_p-0.02 - P_adding
             if abs(power_diff) < 0.02:
                 power_diff = 0.0
