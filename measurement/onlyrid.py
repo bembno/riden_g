@@ -1,6 +1,6 @@
 from lib.batclant import Batclant
 import time
-
+from datetime import datetime
 
 class Onlyrid:
     """Wrapper class exposing all Riden charger functionality via MQTT remote calls."""
@@ -186,6 +186,9 @@ class Onlyrid:
         """Set brightness."""
         return self.batclant.set_value(self.device, "set_light", brightness)
     
+    # NOTE: V_BAT and BAT_MODE are READ-ONLY
+    # To set battery charging voltage, use set_v_set() instead
+    
     # ========== ACTIONS ==========
     
     def update(self):
@@ -195,6 +198,10 @@ class Onlyrid:
     def reconnect(self):
         """Trigger remote reconnect."""
         return self.batclant.get_value(self.device, "reconnect")
+    
+    def reboot_bootloader(self):
+        """Reboot into bootloader mode for firmware flashing."""
+        return self.batclant.get_value(self.device, "reboot_bootloader")
     
     # ========== HELPER ==========
     
@@ -235,6 +242,10 @@ if __name__ == "__main__":
         # Create Riden wrapper
         riden = Onlyrid(batclant)
         
+
+        now = datetime.now().isoformat()
+        riden.set_date_time(now)
+        
         # Test all getter functions
         print("\n📊 Testing Getters:")
         print(f"  ID:              {riden.get_id()}")
@@ -267,6 +278,8 @@ if __name__ == "__main__":
         print(f"  Light:           {riden.get_light()}")
         
         # Test setter functions (CAREFUL - changes device state!)
+        
+
         print("\n⚙️  Testing Setters (non-destructive):")
         print(f"  Set V_set 50.0V: {riden.set_v_set(50.0)}")
         time.sleep(0.5)
@@ -284,6 +297,12 @@ if __name__ == "__main__":
         # Test actions
         print("\n🔄 Testing Actions:")
         print(f"  Update:          {riden.update()}")
+        
+        # Test bat mode (CHANGES DEVICE STATE)
+        print("\n🔋 Testing Battery Mode:")
+        print(f"  Current bat mode: {riden.get_bat_mode()}")
+        print(f"  Current V_BAT:    {riden.get_v_bat()} V")
+
         
         print("\n✅ All tests completed!")
         

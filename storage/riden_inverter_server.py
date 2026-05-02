@@ -6,7 +6,7 @@ import paho.mqtt.client as mqtt
 from drivers.riden import Riden
 from drivers.InverterController import InverterController
 from drivers.PinDriver import PinDriver
-
+from datetime import datetime
 
 BROKER = "192.168.2.38"
 PORT = 1883
@@ -152,6 +152,24 @@ class DeviceServer:
             return {"status": "error", "message": f"No such riden method {action}"}
 
         fn = getattr(self.charger, action)
+
+        # SPECIAL HANDLING FOR TIME
+        if action == "set_date_time":
+            try:
+                if value:
+                    # Accept ISO string from MQTT
+                    dt = datetime.fromisoformat(value)
+                else:
+                    # If no value → use local time
+                    dt = datetime.now()
+
+                out = fn(dt)
+                return {"status": "ok", "device": "riden", "result": "time_set"}
+
+            except Exception as e:
+                return {"status": "error", "message": f"Time parse failed: {e}"}
+
+        # DEFAULT BEHAVIOR
         out = fn(value) if value is not None else fn()
         return {"status": "ok", "device": "riden", "result": out}
 

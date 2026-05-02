@@ -331,6 +331,9 @@ class Riden:
         _v_bat = _v_bat or self.read(R.V_BAT)
         self.v_bat = _v_bat / self.v_multi
         return self.v_bat
+    
+    # V_BAT is READ-ONLY - it's the measured battery voltage
+    # To set target charging voltage, use set_v_set() instead
 
     def get_ext_c(self, _ext_c_s: int = None, _ext_c: int = None) -> int:
         _ext_c_s = _ext_c_s or self.read(R.EXT_C_S)
