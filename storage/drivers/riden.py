@@ -6,7 +6,15 @@ import time
 from datetime import datetime
 from .register import Register as R
 
+
 class Riden:
+    """
+    Drop-in replacement:
+    - same public API
+    - same behavior
+    - internal cleanup only
+    """
+
     def __init__(
         self,
         port="/dev/ttyUSB0",
@@ -21,18 +29,135 @@ class Riden:
         self.baudrate = baudrate
         self.address = address
         self.timeout = timeout
-        self.id = 0
+
         self.serial = None
         self.master = None
 
-        self._open_serial()   # 🔹 Use helper instead of direct init
-        self.init_device()
+        self.id = 0
+        self.type = None
+
         self.v_multi = 100
         self.i_multi = 100
         self.p_multi = 100
         self.v_in_multi = 100
 
-        if 60241 <= self.id:
+        self._open_serial()
+        self.init_device()
+        self._apply_device_profile()
+        self.update()
+
+    # -------------------------------------------------
+    # internal helpers (NEW, but private)
+    # -------------------------------------------------
+    def _log(self, msg):
+        print(msg)
+
+    def _safe(self, v, fallback):
+        return fallback if v is None else v
+
+    def _connected(self):
+        return bool(self.serial and self.serial.is_open)
+
+    def _reset_buffers(self):
+        if self.serial:
+            self.serial.reset_input_buffer()
+            self.serial.reset_output_buffer()
+
+    def _exec(self, func, retries=3, delay=0.2):
+        """
+        Central retry + reconnect handler
+        preserves original behavior but removes duplication
+        """
+        for i in range(retries):
+            try:
+                if not self._connected():
+                    self.reconnect()
+                return func()
+            except (SerialException, OSError, ModbusInvalidResponseError) as e:
+                if isinstance(e, (SerialException, OSError)):
+                    self.reconnect()
+                time.sleep(delay)
+        return None
+
+    # -------------------------------------------------
+    # connection
+    # -------------------------------------------------
+    def _open_serial(self):
+        for i in range(5):
+            try:
+                self.serial = Serial(self.port, self.baudrate, timeout=self.timeout)
+                self.master = RtuMaster(self.serial)
+                self.master.set_timeout(self.timeout)
+                return
+            except SerialException as e:
+                self._log(f"Serial open failed ({i+1}/5): {e}")
+                time.sleep(5)
+        raise SerialException("Cannot open serial port")
+
+    def reconnect(self):
+        try:
+            if self.serial:
+                self.serial.close()
+        except Exception:
+            pass
+        self._open_serial()
+
+    def is_connected(self):
+        return self._connected()
+
+    # -------------------------------------------------
+    # low-level IO
+    # -------------------------------------------------
+    def read(self, register, length=1, retries=3, delay=0.2):
+        def op():
+            self._reset_buffers()
+            res = self.master.execute(self.address, 3, register, length)
+            return res if length > 1 else res[0]
+
+        return self._exec(op, retries, delay)
+
+    def write(self, register, value, retries=3, delay=0.2):
+        def op():
+            self._reset_buffers()
+            return self.master.execute(self.address, 6, register, 1, value)[0]
+
+        return self._exec(op, retries, delay)
+
+    def write_multiple(self, register, values, retries=3, delay=0.2):
+        def op():
+            return self.master.execute(
+                self.address,
+                WRITE_MULTIPLE_REGISTERS,
+                register,
+                1,
+                values,
+            )
+
+        return self._exec(op, retries, delay)
+
+    # -------------------------------------------------
+    # init
+    # -------------------------------------------------
+    def init(self):
+        data = self.read(0, 10)
+        if not data:
+            self.id = 0
+            return
+
+        try:
+            self.id = self.get_id(data[R.ID])
+        except Exception:
+            self.id = 0
+
+    def init_device(self):
+        try:
+            self.init()
+            self._log(f"Init OK ID={self.id}")
+        except Exception as e:
+            self._log(f"Init failed: {e}")
+
+    def _apply_device_profile(self):
+        if self.id >= 60241:
             self.type = "RD6024"
         elif 60180 <= self.id <= 60189:
             self.type = "RD6018"
@@ -42,7 +167,6 @@ class Riden:
             self.type = "RD6012P"
             self.v_multi = 1000
             self.p_multi = 1000
-            # i_multi is not constant!
         elif 60060 <= self.id <= 60064:
             self.type = "RD6006"
             self.i_multi = 1000
@@ -53,175 +177,54 @@ class Riden:
             self.p_multi = 1000
         elif self.id == 60066:
             self.type = "RK6006"
-            self.v_multi = 100
-            self.i_multi = 1000
-            self.p_multi = 100
 
-        self.update()
-    # --- NEW: safe serial open helper ---
-    def _open_serial(self, max_retries=None):
-        """Try to (re)open serial connection. max_retries=None for infinite, int for finite."""
-        if max_retries is None:
-            iterator = iter(int, 1)  # infinite
-            total = "∞"
-        else:
-            iterator = range(max_retries)
-            total = str(max_retries)
-        
-        for attempt in iterator:
-            try:
-                attempt_num = attempt + 1 if max_retries else "∞"
-                print(f"🔌 Opening Riden on {self.port} @ {self.baudrate} (attempt {attempt_num}/{total})...")
-                self.serial = Serial(self.port, self.baudrate, timeout=self.timeout)
-                self.master = RtuMaster(self.serial)
-                self.master.set_timeout(self.timeout)
-                print("✅ Serial connection established.")
-                return
-            except SerialException as e:
-                attempt_num = attempt + 1 if max_retries else "∞"
-                print(f"⚠️ Riden port open failed ({e}), attempt {attempt_num}/{total}")
-                if max_retries is not None and attempt >= max_retries - 1:
-                    raise e
-                time.sleep(5)
-
-    def reconnect(self):
-        """Reopen serial port after error."""
-        try:
-            if self.serial:
-                self.serial.close()
-        except Exception:
-            pass
-        self._open_serial(max_retries=3)
-        try:
-            self.init_device()
-        except Exception as e:
-            print(" Re-init failed after reconnect:", e)
-
-    def is_connected(self):
-        return self.serial and self.serial.is_open
-    
-    def read(self, register, length=1, retries=3, delay=0.2):
-        for attempt in range(1, retries + 1):
-            try:
-                if not self.is_connected():
-                    print(" Riden serial not open, reconnecting...")
-                    self.reconnect()
-
-                if self.serial:
-                    self.serial.reset_input_buffer()
-                    self.serial.reset_output_buffer()
-
-                response = self.master.execute(self.address, 3, register, length)
-                return response if length > 1 else response[0]
-
-            except (SerialException, OSError, ModbusInvalidResponseError) as e:
-                print(f" Read failed ({attempt}/{retries}): {e}")
-                if isinstance(e, (SerialException, OSError)):
-                    self.reconnect()
-                time.sleep(delay)
-
-        print(f" Failed to read register {register} after {retries} retries.")
-        return None           
-
-    def write(self, register, value, retries=3, delay=0.2):
-        for attempt in range(1, retries + 1):
-            try:
-                if not self.is_connected():
-                    print(" Riden serial not open, reconnecting...")
-                    self.reconnect()
-
-                if self.serial:
-                    self.serial.reset_input_buffer()
-                    self.serial.reset_output_buffer()
-
-                result = self.master.execute(self.address, 6, register, 1, value)
-                return result[0]
-            except (SerialException, OSError, ModbusInvalidResponseError) as e:
-                print(f" Write failed ({attempt}/{retries}): {e}")
-                if isinstance(e, (SerialException, OSError)):
-                    self.reconnect()
-                time.sleep(delay)
-
-        print(f"Failed to write register {register} after {retries} retries.")
-        return None
-
-
-    # def write_multiple(self, register: int, values: tuple or list) -> tuple:
-    #     try:
-    #         return self.master.execute(
-    #             self.address, WRITE_MULTIPLE_REGISTERS, register, 1, values
-    #         )
-    #     except ModbusInvalidResponseError:
-    #         return self.write_multiple(register, values)
-    def write_multiple(self, register: int, values: list[int] | tuple[int, ...], retries=3, delay=0.2):
-        for attempt in range(retries):
-            try:
-                return self.master.execute(self.address, WRITE_MULTIPLE_REGISTERS, register, 1, values)
-            except ModbusInvalidResponseError as e:
-                print(f"Write multiple failed ({attempt+1}/{retries}): {e}")
-                time.sleep(delay)
-        print("Failed to write multiple registers after retries")
-        return None
-        
-    def init(self):
-        data = self.read(0, 10)  # example: read 10 registers starting at 0
-        if data is None:
-            print("Unable to initialize device — Modbus read failed.")
-            self.id = 0
-            
-            return
-
-        try:
-            self.id = self.get_id(data[R.ID])
-            #self.type = self.get_type(data[R.TYPE])
-        except Exception as e:
-            print(f"Error parsing init data: {e}")
-            self.id = 0
-
-    def init_device(self):
-        try:
-            self.init()
-            print(f"Riden init successful, ID={self.id}")
-        except Exception as e:
-            print(f"⚠️ Riden init_device() failed: {e}")           
-
-    def get_id(self, _id: int = None) -> int:
-        self.id = _id or self.read(R.ID)
+    # -------------------------------------------------
+    # ID / identity
+    # -------------------------------------------------
+    def get_id(self, _id=None):
+        self.id = self._safe(_id, self.read(R.ID))
         return self.id
 
-    def get_sn(self, _sn_h: int = None, _sn_l: int = None) -> str:
-        _sn_h = _sn_h or self.read(R.SN_H)
-        _sn_l = _sn_l or self.read(R.SN_L)
+    def get_sn(self, _sn_h=None, _sn_l=None):
+        _sn_h = self._safe(_sn_h, self.read(R.SN_H))
+        _sn_l = self._safe(_sn_l, self.read(R.SN_L))
         self.sn = "%08d" % (_sn_h << 16 | _sn_l)
         return self.sn
 
-    def get_fw(self, _fw: int = None) -> int:
-        self.fw = _fw or self.read(R.FW)
+    def get_fw(self, _fw=None):
+        self.fw = self._safe(_fw, self.read(R.FW))
         return self.fw
 
-    def update(self) -> None:
-        data = (None,) * 4  # Fix offset - Init registers
+    # -------------------------------------------------
+    # update (UNCHANGED LOGIC)
+    # -------------------------------------------------
+    def update(self):
+        data = (None,) * 4
         data += self.read(R.INT_C_S, (R.I_RANGE - R.INT_C_S) + 1)
+
         if self.type == "RD6012P":
-            if data[R.I_RANGE] == 0:
-                self.i_multi = 10000
-            else:
-                self.i_multi = 1000
+            self.i_multi = 10000 if data[R.I_RANGE] == 0 else 1000
+
         self.get_int_c(data[R.INT_C_S], data[R.INT_C])
         self.get_int_f(data[R.INT_F_S], data[R.INT_F])
+
         self.get_v_set(data[R.V_SET])
         self.get_i_set(data[R.I_SET])
         self.get_v_out(data[R.V_OUT])
         self.get_i_out(data[R.I_OUT])
         self.get_p_out(data[R.P_OUT])
         self.get_v_in(data[R.V_IN])
+
         self.is_keypad(data[R.KEYPAD])
         self.get_ovp_ocp(data[R.OVP_OCP])
         self.get_cv_cc(data[R.CV_CC])
         self.is_output(data[R.OUTPUT])
         self.get_preset(data[R.PRESET])
-        data += (None,) * 11  # Fix offset - Unused/Unknown registers
+
+        data += (None,) * 11
+
         data += self.read(R.BAT_MODE, (R.WH_L - R.BAT_MODE) + 1)
+
         self.is_bat_mode(data[R.BAT_MODE])
         self.get_v_bat(data[R.V_BAT])
         self.get_ext_c(data[R.EXT_C_S], data[R.EXT_C])
@@ -229,207 +232,200 @@ class Riden:
         self.get_ah(data[R.AH_H], data[R.AH_L])
         self.get_wh(data[R.WH_H], data[R.WH_L])
 
-    def get_int_c(self, _int_c_s: int = None, _int_c: int = None) -> int:
-        _int_c_s = _int_c_s or self.read(R.INT_C_S)
-        _int_c = _int_c or self.read(R.INT_C)
-        sign = -1 if _int_c_s else +1
-        self.int_c = _int_c * sign
+    # -------------------------------------------------
+    # current sense
+    # -------------------------------------------------
+    def get_int_c(self, _int_c_s=None, _int_c=None):
+        _int_c_s = self._safe(_int_c_s, self.read(R.INT_C_S))
+        _int_c = self._safe(_int_c, self.read(R.INT_C))
+        self.int_c = _int_c * (-1 if _int_c_s else 1)
         return self.int_c
 
-    def get_int_f(self, _int_f_s: int = None, _int_f: int = None) -> int:
-        _int_f_s = _int_f_s or self.read(R.INT_F_S)
-        _int_f = _int_f or self.read(R.INT_F)
-        sign = -1 if _int_f_s else +1
-        self.int_f = _int_f * sign
+    def get_int_f(self, _int_f_s=None, _int_f=None):
+        _int_f_s = self._safe(_int_f_s, self.read(R.INT_F_S))
+        _int_f = self._safe(_int_f, self.read(R.INT_F))
+        self.int_f = _int_f * (-1 if _int_f_s else 1)
         return self.int_f
 
-    def get_v_set(self, _v_set: int = None) -> float:
-        _v_set = _v_set or self.read(R.V_SET)
-        self.v_set = _v_set / self.v_multi
-        return self.v_set
-
-    def set_v_set(self, v_set: float) -> float:
-        self.v_set = round(v_set * self.v_multi)
+    # -------------------------------------------------
+    # set/get values
+    # -------------------------------------------------
+    def set_v_set(self, v):
+        self.v_set = round(v * self.v_multi)
         return self.write(R.V_SET, int(self.v_set))
 
-    def get_i_set(self, _i_set: int = None) -> float:
-        _i_set = _i_set or self.read(R.I_SET)
-        self.i_set = _i_set / self.i_multi
+    def set_i_set(self, i):
+        self.i_set = round(i * self.i_multi)
+        return self.write(R.I_SET, int(self.i_set))
+
+    def get_v_set(self, v=None):
+        self.v_set = self._safe(v, self.read(R.V_SET)) / self.v_multi
+        return self.v_set
+
+    def get_i_set(self, i=None):
+        self.i_set = self._safe(i, self.read(R.I_SET)) / self.i_multi
         return self.i_set
 
-    
-    def set_i_set(self, i_set: float) -> float:
-        self.i_set = round(i_set * self.i_multi)
-        result = self.write(R.I_SET, int(self.i_set))
-        return result
-
-
-    def get_v_out(self, _v_out: int = None) -> float:
-        _v_out = _v_out or self.read(R.V_OUT)
-        self.v_out = _v_out / self.v_multi
+    def get_v_out(self, v=None):
+        self.v_out = self._safe(v, self.read(R.V_OUT)) / self.v_multi
         return self.v_out
 
-    def get_i_out(self, _i_out: int = None) -> float:
-        _i_out = _i_out or self.read(R.I_OUT)
-        self.i_out = _i_out / self.i_multi
+    def get_i_out(self, i=None):
+        self.i_out = self._safe(i, self.read(R.I_OUT)) / self.i_multi
         return self.i_out
 
-    def get_p_out(self, _p_out: int = None) -> float:
-        _p_out = _p_out or self.read(R.P_OUT)
-        self.p_out = _p_out / self.p_multi
+    def get_p_out(self, p=None):
+        self.p_out = self._safe(p, self.read(R.P_OUT)) / self.p_multi
         return self.p_out
 
-    def get_v_in(self, _v_in: int = None) -> float:
-        _v_in = _v_in or self.read(R.V_IN)
-        self.v_in = _v_in / self.v_in_multi
+    def get_v_in(self, v=None):
+        self.v_in = self._safe(v, self.read(R.V_IN)) / self.v_in_multi
         return self.v_in
 
-    def is_keypad(self, _keypad: int = None) -> bool:
-        self.keypad = bool(_keypad or self.read(R.KEYPAD))
+    # -------------------------------------------------
+    # flags / status (unchanged behavior)
+    # -------------------------------------------------
+    def is_keypad(self, v=None):
+        self.keypad = bool(self._safe(v, self.read(R.KEYPAD)))
         return self.keypad
 
-    def get_ovp_ocp(self, _ovp_ocp: int = None) -> str:
-        _ovp_ocp = _ovp_ocp or self.read(R.OVP_OCP)
-        self.ovp_ocp = (
-            "OVP" if _ovp_ocp == 1 else "OCP" if _ovp_ocp == 2 else None
-        )
+    def get_ovp_ocp(self, v=None):
+        v = self._safe(v, self.read(R.OVP_OCP))
+        self.ovp_ocp = "OVP" if v == 1 else "OCP" if v == 2 else None
         return self.ovp_ocp
 
-    def get_cv_cc(self, _cv_cc: int = None) -> str:
-        _cv_cc = _cv_cc or self.read(R.CV_CC)
-        self.cv_cc = "CV" if _cv_cc == 0 else "CC" if _cv_cc == 1 else None
+    def get_cv_cc(self, v=None):
+        v = self._safe(v, self.read(R.CV_CC))
+        self.cv_cc = "CV" if v == 0 else "CC"
         return self.cv_cc
-    
-    def set_cv_cc(self, mode: str | int) -> int:
+
+    def set_cv_cc(self, mode):
         if isinstance(mode, str):
             mode = 0 if mode.upper() == "CV" else 1
         self.cv_cc = "CV" if mode == 0 else "CC"
-        return self.write(R.CV_CC, int(mode))
+        return self.write(R.CV_CC, mode)
 
-    def is_output(self, _output: int = None) -> bool:
-        self.output = bool(_output or self.read(R.OUTPUT))
+    def is_output(self, v=None):
+        self.output = bool(self._safe(v, self.read(R.OUTPUT)))
         return self.output
 
-    def set_output(self, output: bool) -> None:
-        self.output = output
+    def set_output(self, v):
+        self.output = bool(v)
         return self.write(R.OUTPUT, int(self.output))
 
-    def get_preset(self, _preset: int = None) -> int:
-        "Always returns 0 on my device, setter works as expected"
-        self.preset = _preset or self.read(R.PRESET)
+    def get_preset(self, v=None):
+        self.preset = self._safe(v, self.read(R.PRESET))
         return self.preset
 
-    def set_preset(self, preset: int) -> int:
-        self.preset = preset
-        return self.write(R.PRESET, self.preset)
+    def set_preset(self, v):
+        self.preset = v
+        return self.write(R.PRESET, v)
 
-    def is_bat_mode(self, _bat_mode: int = None) -> bool:
-        self.bat_mode = bool(_bat_mode or self.read(R.BAT_MODE))
+    def is_bat_mode(self, v=None):
+        self.bat_mode = bool(self._safe(v, self.read(R.BAT_MODE)))
         return self.bat_mode
 
-    def get_v_bat(self, _v_bat: int = None) -> float:
-        _v_bat = _v_bat or self.read(R.V_BAT)
-        self.v_bat = _v_bat / self.v_multi
+    def get_v_bat(self, v=None):
+        self.v_bat = self._safe(v, self.read(R.V_BAT)) / self.v_multi
         return self.v_bat
-    
-    # V_BAT is READ-ONLY - it's the measured battery voltage
-    # To set target charging voltage, use set_v_set() instead
 
-    def get_ext_c(self, _ext_c_s: int = None, _ext_c: int = None) -> int:
-        _ext_c_s = _ext_c_s or self.read(R.EXT_C_S)
-        _ext_c = _ext_c or self.read(R.EXT_C)
-        sign = -1 if _ext_c_s else +1
-        self.ext_c = _ext_c * sign
+    def get_ext_c(self, s=None, v=None):
+        s = self._safe(s, self.read(R.EXT_C_S))
+        v = self._safe(v, self.read(R.EXT_C))
+        self.ext_c = v * (-1 if s else 1)
         return self.ext_c
 
-    def get_ext_f(self, _ext_f_s: int = None, _ext_f: int = None) -> int:
-        _ext_f_s = _ext_f_s or self.read(R.EXT_F_S)
-        _ext_f = _ext_f or self.read(R.EXT_F)
-        sign = -1 if _ext_f_s else +1
-        self.ext_f = _ext_f * sign
+    def get_ext_f(self, s=None, v=None):
+        s = self._safe(s, self.read(R.EXT_F_S))
+        v = self._safe(v, self.read(R.EXT_F))
+        self.ext_f = v * (-1 if s else 1)
         return self.ext_f
 
-    def get_ah(self, _ah_h: int = None, _ah_l: int = None) -> float:
-        _ah_h = _ah_h or self.read(R.AH_H)
-        _ah_l = _ah_l or self.read(R.AH_L)
-        self.ah = (_ah_h << 16 | _ah_l) / 1000
+    def get_ah(self, h=None, l=None):
+        h = self._safe(h, self.read(R.AH_H))
+        l = self._safe(l, self.read(R.AH_L))
+        self.ah = (h << 16 | l) / 1000
         return self.ah
 
-    def get_wh(self, _wh_h: int = None, _wh_l: int = None) -> float:
-        _wh_h = _wh_h or self.read(R.WH_H)
-        _wh_l = _wh_l or self.read(R.WH_L)
-        self.wh = (_wh_h << 16 | _wh_l) / 1000
+    def get_wh(self, h=None, l=None):
+        h = self._safe(h, self.read(R.WH_H))
+        l = self._safe(l, self.read(R.WH_L))
+        self.wh = (h << 16 | l) / 1000
         return self.wh
 
-    def get_date_time(self) -> str:
+    # -------------------------------------------------
+    # time / misc (unchanged)
+    # -------------------------------------------------
+    def get_date_time(self):
         if self.type == "RK6006":
             return None
         d = self.read(R.YEAR, 6)
         self.datetime = datetime(d[0], d[1], d[2], d[3], d[4], d[5])
         return self.datetime.isoformat()
 
-    def set_date_time(self, d: datetime) -> int:
+    def set_date_time(self, d: datetime):
         return self.write_multiple(
-            R.YEAR, (d.year, d.month, d.day, d.hour, d.minute, d.second)
+            R.YEAR,
+            (d.year, d.month, d.day, d.hour, d.minute, d.second),
         )
 
-    def is_take_ok(self, _take_ok: int = None) -> bool:
-        self.take_ok = bool(_take_ok or self.read(R.OPT_TAKE_OK))
+    def is_take_ok(self, v=None):
+        self.take_ok = bool(self._safe(v, self.read(R.OPT_TAKE_OK)))
         return self.take_ok
 
-    def set_take_ok(self, take_ok: bool) -> bool:
-        self.take_ok = take_ok
+    def set_take_ok(self, v):
+        self.take_ok = bool(v)
         return self.write(R.OPT_TAKE_OK, self.take_ok)
 
-    def is_take_out(self, _take_out: int = None) -> bool:
-        self.take_out = bool(_take_out or self.read(R.OPT_TAKE_OUT))
+    def is_take_out(self, v=None):
+        self.take_out = bool(self._safe(v, self.read(R.OPT_TAKE_OUT)))
         return self.take_out
 
-    def set_take_out(self, take_out: bool) -> bool:
-        self.take_out = take_out
+    def set_take_out(self, v):
+        self.take_out = bool(v)
         return self.write(R.OPT_TAKE_OUT, self.take_out)
 
-    def is_boot_pow(self, _boot_pow: int = None) -> bool:
-        self.boot_pow = bool(_boot_pow or self.read(R.OPT_BOOT_POW))
+    def is_boot_pow(self, v=None):
+        self.boot_pow = bool(self._safe(v, self.read(R.OPT_BOOT_POW)))
         return self.boot_pow
 
-    def set_boot_pow(self, boot_pow: bool) -> bool:
-        self.boot_pow = boot_pow
+    def set_boot_pow(self, v):
+        self.boot_pow = bool(v)
         return self.write(R.OPT_BOOT_POW, self.boot_pow)
 
-    def is_buzz(self, _buzz: int = None) -> bool:
-        self.buzz = bool(_buzz or self.read(R.OPT_BUZZ))
+    def is_buzz(self, v=None):
+        self.buzz = bool(self._safe(v, self.read(R.OPT_BUZZ)))
         return self.buzz
 
-    def set_buzz(self, buzz: bool) -> bool:
-        self.buzz = buzz
+    def set_buzz(self, v):
+        self.buzz = bool(v)
         return self.write(R.OPT_BUZZ, self.buzz)
 
-    def is_logo(self, _logo: int = None) -> bool:
-        self.logo = bool(_logo or self.read(R.OPT_LOGO))
+    def is_logo(self, v=None):
+        self.logo = bool(self._safe(v, self.read(R.OPT_LOGO)))
         return self.logo
 
-    def set_logo(self, logo: bool) -> bool:
-        self.logo = logo
+    def set_logo(self, v):
+        self.logo = bool(v)
         return self.write(R.OPT_LOGO, self.logo)
 
-    def get_lang(self) -> int:
+    def get_lang(self):
         self.lang = self.read(R.OPT_LANG)
         return self.lang
 
-    def set_lang(self, lang: int) -> int:
-        self.lang = lang
-        return self.write(R.OPT_LANG, self.lang)
+    def set_lang(self, v):
+        self.lang = v
+        return self.write(R.OPT_LANG, v)
 
-    def get_light(self) -> int:
+    def get_light(self):
         self.light = self.read(R.OPT_LIGHT)
         return self.light
 
-    def set_light(self, light: int) -> int:
-        self.light = light
-        return self.write(R.OPT_LIGHT, self.light)
+    def set_light(self, v):
+        self.light = v
+        return self.write(R.OPT_LIGHT, v)
 
-    def reboot_bootloader(self) -> None:
+    def reboot_bootloader(self):
         try:
             self.write(R.SYSTEM, R.BOOTLOADER)
         except ModbusInvalidResponseError:

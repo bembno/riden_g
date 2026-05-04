@@ -129,7 +129,7 @@ class SMainBat:
     def print_status_line(self, 
             import_p=0.0, export_p=0.0, power_diff=0.0, pid_power=0.0,
             L1=0.0, L2=0.0, L3=0.0,
-            war_power=0.0, rid_P_out=0.0, current=0.0, v_out=0.0
+            war_power=0.0, rid_P_out=0.0, current=0.0, v_out=0.0,taper_factor=1.0
         ):
             """Prints a color-coded status line of system parameters (skips zeros)."""
 
@@ -165,6 +165,10 @@ class SMainBat:
             # Riden data
             add("rid", rid_P_out, rid_color)
             add("I", current, curr_color, fmt="{:.1f}")
+
+            if taper_factor < 1.0:
+                add("tap", taper_factor, YELLOW, fmt="{:.2f}")
+            
             add("V", v_out,vout_color, fmt="{:.1f}")
             add("Te", self.temp_ext_c, fmt="{:.0f}")
             add("Ti", self.temp_int_c, fmt="{:.0f}")
@@ -199,7 +203,7 @@ class SMainBat:
 
 
     def main_loop(self):
-
+        taper_factor = 1.0  # default to no tapering
         try:
             #get data from metter P1
             import_p, export_p, L1, L2, L3 = (self.meter.get_power() + [0.0] * 8)[:5]
@@ -301,8 +305,8 @@ class SMainBat:
                             self.max_current
                         )
 
-                        if taper_factor < 1.0:
-                            print(f"Taper factor: {taper_factor:.2f} | Current: {self.current:.2f} A | V: {self.v_out:.2f} V")
+                        #if taper_factor < 1.0:
+                        #    print(f"Taper factor: {taper_factor:.2f} | Current: {self.current:.2f} A | V: {self.v_out:.2f} V")
 
 
                         #self.rid_P_out = (self.riden.p_out or 0.0) / 1000.0
@@ -336,7 +340,8 @@ class SMainBat:
                 war_power=inv_power,
                 rid_P_out=self.rid_P_out,
                 current=self.current,
-                v_out=self.v_out    )
+                v_out=self.v_out,
+                taper_factor=taper_factor)
             
             return import_p,\
                     export_p,\
@@ -348,7 +353,8 @@ class SMainBat:
                     inv_power,\
                     self.rid_P_out,\
                     self.current,\
-                    self.v_out           
+                    self.v_out,\
+                    taper_factor
 
 
             
