@@ -211,6 +211,8 @@ class SMainBat:
             if self.riden.available:
                 try:
                     self.riden.get_full_status()
+                    if self.riden.v_set != self.Vmax_bat:
+                        self.riden.initialize()  # re-apply settings if we detect a change (e.g. after reset)
                    
                     self.temp_int_c = self.riden.temp_int
                     self.temp_ext_c = self.riden.temp_ext

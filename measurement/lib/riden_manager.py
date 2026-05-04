@@ -26,6 +26,7 @@ class RidenManager:
         self.output = None
         self.ah = None
         self.wh = None
+        self.v_set = None
 
         # Optional dict snapshot (for compatibility/logging)
         self.status = {}
@@ -122,6 +123,7 @@ class RidenManager:
             return False
 
         try:
+            self.v_set = self.batclant.get_value("riden", "get_v_set")
             self.v_out = self.batclant.get_value("riden", "get_v_out")
             self.i_out = self.batclant.get_value("riden", "get_i_out")
             self.p_out = self.batclant.get_value("riden", "get_p_out")
@@ -136,6 +138,7 @@ class RidenManager:
 
             # Optional snapshot
             self.status = {
+                "v_set": self.v_set,
                 "v_out": self.v_out,
                 "i_out": self.i_out,
                 "p_out": self.p_out,
@@ -167,9 +170,6 @@ class RidenManager:
             return False
 
         try:
-            self.get_full_status()
-            print("Updated Riden status:", self.status)
-
             if not self.output:
                 self.set_output(True)
            
