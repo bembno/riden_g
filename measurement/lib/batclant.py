@@ -6,7 +6,7 @@ import paho.mqtt.client as mqtt
 
 
 class Batclant:
-    def __init__(self, broker="192.168.2.38", port=1883,
+    def __init__(self, broker="192.168.2.42", port=1883,
                  topic_cmd="devices/command", topic_resp="devices/response"):
         self.broker = broker
         self.port = port

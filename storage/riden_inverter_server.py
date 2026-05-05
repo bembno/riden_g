@@ -2,18 +2,21 @@ import json
 import time
 import threading
 import paho.mqtt.client as mqtt
+import os
+import subprocess
 
 from drivers.riden import Riden
 from drivers.InverterController import InverterController
 from drivers.PinDriver import PinDriver
 from datetime import datetime
 
-BROKER = "192.168.2.38"
+#BROKER = "192.168.2.42"
+BROKER = "127.0.0.1"
 PORT = 1883
 TOPIC_CMD = "devices/command"
 TOPIC_RESP = "devices/response"
 
-WATCHDOG_TIMEOUT = 5.0
+WATCHDOG_TIMEOUT = 10.0
 CHECK_INTERVAL = 0.5
 
 
@@ -221,20 +224,28 @@ class DeviceServer:
             if time.time() - self.last_client_msg > WATCHDOG_TIMEOUT:
                 with self.lock:
                     charger_ok = self.charger is not None and self.charger.is_connected()
-                    
+
                     if self.charger_required:
-                        # Charger was connected before → Enforce safety
-                        print("WATCHDOG: Charger required, forcing safety shutdown")
+                        print("WATCHDOG: Charger required → shutdown + REBOOT")
+
                         try:
                             if self.inverter is not None:
                                 self.inverter.ModifyPower(0)
+
                             if charger_ok:
                                 self.charger.set_output(False)
+
                         except Exception as e:
                             print(f"WATCHDOG safety shutdown failed: {e}")
+
+                        time.sleep(2)
+
+                        print("WATCHDOG: REBOOTING SYSTEM NOW")
+                        #os.system("/sbin/reboot")
+                        subprocess.call(["sudo", "reboot"])
+
                     else:
-                        # Charger never connected → Allow independent operation
-                        print("WATCHDOG: Charger not required, inverter operating independently (no shutdown)")
+                        print("WATCHDOG: no charger required → inverter safe mode only")
             time.sleep(CHECK_INTERVAL)
 
     # ------------------------------------------------------------
