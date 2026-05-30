@@ -81,6 +81,14 @@ class SMainBat:
         self.max_output=1.8
         self.temp_max_allowed=35.0
 
+        self.db_host = "192.168.2.33"
+        self.db_user = "admin"
+        self.db_password = "aaa"
+        self.db_database = "energy"
+        self.db_reconnect_cooldown = 5.0
+        self._last_db_connect_attempt = 0.0
+        self._db_connection_warned = False
+
         self.riden = RidenManager(self.batclant, v_max_bat=self.Vmax_bat, check_interval=10.0)
 
         # sw watchdog to ensure script restarts if it hangs for some reason (e.g. meter thread issues)
@@ -90,25 +98,7 @@ class SMainBat:
         # Riden health monitoring (non-blocking background thread)
         self.riden.start_monitor()
 
-
-        try:
-            self.storage = P1Storage(
-                host="192.168.2.33",
-                user="admin", 
-                password="aaa",
-                database="energy"
-            )
-            if self.storage.connection is not None and self.storage.cursor is not None:
-                print("Database connection established")
-            else:
-                print(f"{YELLOW}WARNING: Database not available{RESET}")
-                self.storage = None
-
-            
-        except Exception as e:
-            print(f"{YELLOW}WARNING: Failed to initialize database: {e}{RESET}")
-            self.storage = None
-            
+        self._try_connect_storage(force=True)
 
     def initialize_values(self):
         # Check Riden health first
@@ -124,6 +114,34 @@ class SMainBat:
             print("Inverter power:", self.batclant.get_value("inverter", "get_power"))
         except Exception as e:
             print(f"Error initializing inverter: {e}")
+
+
+    def _try_connect_storage(self, force=False):
+        now = time.time()
+        if not force and now - self._last_db_connect_attempt < self.db_reconnect_cooldown:
+            return
+        self._last_db_connect_attempt = now
+
+        try:
+            storage = P1Storage(
+                host=self.db_host,
+                user=self.db_user,
+                password=self.db_password,
+                database=self.db_database
+            )
+            if storage.connection is not None and storage.cursor is not None:
+                self.storage = storage
+                self._db_connection_warned = False
+                print("Database connection established")
+            else:
+                storage.close()
+                if not self._db_connection_warned:
+                    print(f"{YELLOW}WARNING: Database not available{RESET}")
+                    self._db_connection_warned = True
+        except Exception as e:
+            if not self._db_connection_warned:
+                print(f"{YELLOW}WARNING: Failed to initialize database: {e}{RESET}")
+                self._db_connection_warned = True
 
 
     def print_status_line(self, 
@@ -200,6 +218,9 @@ class SMainBat:
                 except Exception:
                     # Silently fail - connection state is logged in P1Storage
                     pass
+            else:
+                self._try_connect_storage()
+            
 
 
     def main_loop(self):

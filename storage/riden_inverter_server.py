@@ -16,7 +16,7 @@ PORT = 1883
 TOPIC_CMD = "devices/command"
 TOPIC_RESP = "devices/response"
 
-WATCHDOG_TIMEOUT = 10.0
+WATCHDOG_TIMEOUT = 60.0
 CHECK_INTERVAL = 0.5
 
 
