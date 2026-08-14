@@ -89,6 +89,12 @@ class SMainBat:
         self._last_db_connect_attempt = 0.0
         self._db_connection_warned = False
 
+        self.pin_state = None
+        self.pin_requested = None
+        self.pin_request_time = 0
+        self.pin_hysteresis = 60  # seconds
+        
+
         self.riden = RidenManager(self.batclant, v_max_bat=self.Vmax_bat, check_interval=10.0)
 
         # sw watchdog to ensure script restarts if it hangs for some reason (e.g. meter thread issues)
@@ -142,6 +148,36 @@ class SMainBat:
             if not self._db_connection_warned:
                 print(f"{YELLOW}WARNING: Failed to initialize database: {e}{RESET}")
                 self._db_connection_warned = True
+
+    def set_pindriver(self, state):
+        """Request PinDriver state. State must remain unchanged for the hysteresis time."""
+
+        if state not in ("connect", "disconnect"):
+            return
+
+        now = time.time()
+
+        # New/different request -> start/restart timer
+        if state != self.pin_requested:
+            self.pin_requested = state
+            self.pin_request_time = now
+            print(
+                f"PinDriver: requested {state}, "
+                f"waiting {self.pin_hysteresis}s"
+            )
+            return
+
+        # Request remained unchanged long enough -> apply it
+        if state != self.pin_state and now - self.pin_request_time >= self.pin_hysteresis:
+            try:
+                self.batclant.set_value("pindriver", state, None)
+                self.pin_state = state
+                print(f"PinDriver: changed to {state}")
+
+            except Exception as e:
+                print(f"PinDriver error: {e}")
+
+
 
 
     def print_status_line(self, 
@@ -281,8 +317,13 @@ class SMainBat:
             pid_power = self.pid.adjustPower(power_diff, min_output=self.min_output, max_output=self.max_output) or 0.0
             inv_power = max(0, round(pid_power * 1000))
 
+
+
             #execute changes to inverter and Riden based on PID output
             if pid_power >= 0:
+                #electricly disconnect the Riden from the battery via PinDriver (active-low)
+                self.set_pindriver("disconnect")
+
                     # Discharge via 2 inverters
                 double_inv_power = inv_power / 2
                 if self.v_out is not None and self.v_out != 0:
@@ -305,7 +346,11 @@ class SMainBat:
             else:
                     # Charge via Riden (if available) or standby (if not)
                 try:
+                    #electricly connect the Riden to the battery via PinDriver (active-low)
+                    self.set_pindriver("connect")
+
                     self.batclant.set_value("inverter", "set_power", 0)
+
                 except Exception as e:
                     print(f"{YELLOW}Warning: Failed to set inverter power to 0: {e}{RESET}")
                 
