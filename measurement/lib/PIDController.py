@@ -130,31 +130,74 @@ class PIDController:
 
         return safe_voltage
     
+    # def voltage_taper(self, voltage):
+    #     """
+    #     Returns taper factor (0.0 - 1.0) based on battery voltage.
+    #     Smoothly reduces current near full charge.
+    #     """
+
+    #     if voltage is None:
+    #         return 1.0
+
+    #     taper_start = self.Vmax - self.taper_start_offset
+
+    #     if voltage <= taper_start:
+    #         return 1.0
+
+    #     # normalize 0..1
+    #     raw = (self.Vmax - voltage) / (self.Vmax - taper_start)
+
+    #     # clamp
+    #     raw = max(0.0, min(1.0, raw))
+
+    #     # smooth curve (important for stability)
+    #     factor = raw ** self.taper_power
+
+    #     return max(self.taper_min_factor, factor)
     def voltage_taper(self, voltage):
         """
-        Returns taper factor (0.0 - 1.0) based on battery voltage.
-        Smoothly reduces current near full charge.
+        Returns a stable taper factor (0.0 - 1.0) based on battery voltage.
+        Prevents sudden jumps caused by voltage fluctuations.
         """
 
         if voltage is None:
-            return 1.0
+            return getattr(self, "_taper_factor", 1.0)
+
+        # Initialize state
+        if not hasattr(self, "_taper_factor"):
+            self._taper_factor = 1.0
 
         taper_start = self.Vmax - self.taper_start_offset
 
+        # Below taper voltage: target is full current
         if voltage <= taper_start:
-            return 1.0
+            target = 1.0
+        else:
+            raw = (self.Vmax - voltage) / (self.Vmax - taper_start)
+            raw = max(0.0, min(1.0, raw))
 
-        # normalize 0..1
-        raw = (self.Vmax - voltage) / (self.Vmax - taper_start)
+            target = max(
+                self.taper_min_factor,
+                raw ** self.taper_power
+            )
 
-        # clamp
-        raw = max(0.0, min(1.0, raw))
+        # Limit how quickly the taper can change.
+        # Increase slowly, decrease faster.
+        max_increase = 0.10
+        max_decrease = 0.10
 
-        # smooth curve (important for stability)
-        factor = raw ** self.taper_power
+        if target > self._taper_factor:
+            self._taper_factor = min(
+                target,
+                self._taper_factor + max_increase
+            )
+        else:
+            self._taper_factor = max(
+                target,
+                self._taper_factor - max_decrease
+            )
 
-        return max(self.taper_min_factor, factor)
-    
+        return self._taper_factor
     def limit_current_with_taper(self, current, voltage, max_current):
         """
         Applies:
