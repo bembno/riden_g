@@ -150,10 +150,18 @@ class SMainBat:
                 self._db_connection_warned = True
 
     def set_pindriver(self, state):
-        """Request PinDriver state. State must remain unchanged for the hysteresis time."""
+        """Request PinDriver state. State must remain unchanged for the hysteresis time.
 
+        External API: accepts the strings "connect" or "disconnect".
+        Internally self.pin_state is a boolean: True == connected, False == disconnected, None == unknown.
+
+        Returns:
+            bool or None: the currently applied pin state (True/False) or None if unknown.
+        """
+
+        # If the caller passed an invalid argument, return current applied state
         if state not in ("connect", "disconnect"):
-            return
+            return self.pin_state
 
         now = time.time()
 
@@ -165,17 +173,27 @@ class SMainBat:
                 f"PinDriver: requested {state}, "
                 f"waiting {self.pin_hysteresis}s"
             )
-            return
+            # Return the currently applied (stored) state — not yet changed
+            return self.pin_state
+
+        # Map requested textual state to internal boolean
+        desired_bool = True if state == "connect" else False
 
         # Request remained unchanged long enough -> apply it
-        if state != self.pin_state and now - self.pin_request_time >= self.pin_hysteresis:
+        if now - self.pin_request_time >= self.pin_hysteresis and (self.pin_state is None or desired_bool != self.pin_state):
             try:
+                # send textual command to the driver as before
                 self.batclant.set_value("pindriver", state, None)
-                self.pin_state = state
-                print(f"PinDriver: changed to {state}")
+                # store boolean internal state
+                self.pin_state = desired_bool
+                human_state = "connect" if desired_bool else "disconnect"
+                print(f"PinDriver: changed to {human_state}")
 
             except Exception as e:
                 print(f"PinDriver error: {e}")
+
+        # Always return the currently applied (stored) state
+        return self.pin_state
 
 
 
@@ -183,7 +201,8 @@ class SMainBat:
     def print_status_line(self, 
             import_p=0.0, export_p=0.0, power_diff=0.0, pid_power=0.0,
             L1=0.0, L2=0.0, L3=0.0,
-            war_power=0.0, rid_P_out=0.0, current=0.0, v_out=0.0,taper_factor=1.0
+            war_power=0.0, rid_P_out=0.0, current=0.0, v_out=0.0,taper_factor=1.0,
+            riden_pin_state=False
         ):
             """Prints a color-coded status line of system parameters (skips zeros)."""
 
@@ -207,11 +226,6 @@ class SMainBat:
             add("di", power_diff, diff_color)
             add("pid", pid_power, CYAN)
 
-            # Phases
-            #add("L1", L1)
-           # add("L2", L2)
-           # add("L3", L3)
-
             # Inverter power (integer watts)
             if war_power:
                 parts.append(f"inv:{inv_color}{int(war_power)}{RESET}")
@@ -226,6 +240,7 @@ class SMainBat:
             add("V", v_out,vout_color, fmt="{:.1f}")
             add("Te", self.temp_ext_c, fmt="{:.0f}")
             add("Ti", self.temp_int_c, fmt="{:.0f}")
+            add("R_on", 1 if riden_pin_state else 0, fmt="{}")  # Show pin state as 1 or 0
             print(" ".join(parts))
 
             # Log to database only if connection is available
@@ -244,7 +259,8 @@ class SMainBat:
                         current=current,
                         v_out=v_out,
                         temp_ext_c=self.temp_ext_c,
-                        temp_int_c=self.temp_int_c
+                        temp_int_c=self.temp_int_c,
+                        riden_pin_state=riden_pin_state
                     )
 
                     parsed =self.meter.get_recent_parsed()
@@ -322,7 +338,7 @@ class SMainBat:
             #execute changes to inverter and Riden based on PID output
             if pid_power >= 0:
                 #electricly disconnect the Riden from the battery via PinDriver (active-low)
-                self.set_pindriver("disconnect")
+                riden_pin_state=self.set_pindriver("disconnect")
 
                     # Discharge via 2 inverters
                 double_inv_power = inv_power / 2
@@ -347,7 +363,7 @@ class SMainBat:
                     # Charge via Riden (if available) or standby (if not)
                 try:
                     #electricly connect the Riden to the battery via PinDriver (active-low)
-                    self.set_pindriver("connect")
+                    riden_pin_state = self.set_pindriver("connect")
 
                     self.batclant.set_value("inverter", "set_power", 0)
 
@@ -409,7 +425,9 @@ class SMainBat:
                 rid_P_out=self.rid_P_out,
                 current=self.current,
                 v_out=self.v_out,
-                taper_factor=taper_factor)
+                taper_factor=taper_factor,
+                riden_pin_state=riden_pin_state
+                )
             
             return import_p,\
                     export_p,\
