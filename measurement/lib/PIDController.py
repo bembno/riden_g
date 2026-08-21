@@ -2,7 +2,7 @@ import time
 
 
 class PIDController:
-    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0,Vmin=46.0, Vmax=57.5, max_change_ratio=0.1):
+    def __init__(self, kp=1.0, ki=0.0, kd=0.0, setpoint=0.0,Vmin=46.0, Vmax=57.0, max_change_ratio=0.1):
         self.kp = kp
         self.ki = ki
         self.kd = kd
