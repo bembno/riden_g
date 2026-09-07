@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jkbms"
+version = "2.0.0"
+description = "Read data from a JK BMS (JK-B2A24S15P, BEKEN BLE module) over BLE"
+readme = "jkbms/__init__.py"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "bleak>=0.20",
+]
+
+[project.optional-dependencies]
+linux = ["dbus-fast>=1.0"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+jkbms = "jkbms.cli:main"
+
+[tool.setuptools]
+packages = ["jkbms"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
