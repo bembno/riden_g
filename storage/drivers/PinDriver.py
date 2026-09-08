@@ -1,21 +1,25 @@
 from gpiozero import LED
-from time import sleep
+
 
 class PinDriver:
     def __init__(self, pin: int):
-        # LED() drives pin HIGH when .on() and LOW when .off()
-        # We want active-low: LOW = connected, HIGH = disconnected
+        # gpiozero LED: .on() drives the pin HIGH, .off() drives it LOW.
+        # The relay wiring is active-HIGH in this setup:
+        # HIGH = relay energized = charger power ON,
+        # LOW  = relay released  = charger power OFF.
+        # (Confirmed by hardware: Riden powers up on connect().)
         self.pin = LED(pin)
 
     def connect(self) -> None:
+        """Energize relay -> power the Riden charger."""
         self.pin.on()
 
     def disconnect(self) -> None:
+        """Release relay -> cut power to the Riden charger."""
         self.pin.off()
 
 
 # Example usage
-#driver = PinDriver(17)
-#driver.connect()     # 0V
-#sleep(2)
-#driver.disconnect()  # HIGH
+# driver = PinDriver(17)
+# driver.connect()     # HIGH -> charger powered
+# driver.disconnect()  # LOW  -> charger unpowered

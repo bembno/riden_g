@@ -66,7 +66,7 @@ class SMainBat:
         
         self.pid = PIDController(kp=2.5, ki=0.05, kd=0.05,Vmin=self.vmin_bat, Vmax=self.Vmax_bat, setpoint=0.0, max_change_ratio=1.0)
         
-        if not self.meter.wait_until_ready(timeout=1):
+        if not self.meter.wait_until_ready(timeout=5):
                     print("Warning: meter did not become ready within 5 seconds")
         # Initialize database storage (optional)
         self.storage = None
@@ -93,6 +93,11 @@ class SMainBat:
         self.pin_requested = None
         self.pin_request_time = 0
         self.pin_hysteresis = 60  # seconds
+
+        # set_power deadband: skip redundant inverter sends (the inverter's
+        # own keep-alive thread re-sends the last value every 0.5 s anyway)
+        self.inv_deadband_w = 20.0  # watts
+        self._last_inv_sent = None  # last value actually sent to the server
         
 
         self.riden = RidenManager(self.batclant, v_max_bat=self.Vmax_bat, check_interval=10.0)
@@ -116,7 +121,7 @@ class SMainBat:
 
         # Set inverter power (always try)
         try:
-            self.batclant.set_value("inverter", "set_power", 0)
+            self._set_inverter_power(0)
             print("Inverter power:", self.batclant.get_value("inverter", "get_power"))
         except Exception as e:
             print(f"Error initializing inverter: {e}")
@@ -275,9 +280,44 @@ class SMainBat:
             
 
 
+    def _set_inverter_power(self, power_w):
+        """Send inverter set_power only when the value changed beyond the
+        deadband. Zero is ALWAYS sent (safety). Returns True if sent."""
+        power_w = round(float(power_w))
+        if (self._last_inv_sent is not None and power_w != 0
+                and abs(power_w - self._last_inv_sent) < self.inv_deadband_w):
+            return False
+        try:
+            self.batclant.set_value("inverter", "set_power", power_w)
+            self._last_inv_sent = power_w
+            return True
+        except Exception as e:
+            print(f"{YELLOW}Warning: Failed to set inverter power: {e}{RESET}")
+            return False
+
+    def _safe_idle(self, reason):
+        """Zero all power outputs and log a warning (used on stale meter data)."""
+        print(f"{BRIGHT_RED}SAFE IDLE: {reason} - zeroing outputs{RESET}")
+        self._set_inverter_power(0)
+        if self.riden.available:
+            try:
+                self.batclant.set_value("riden", "set_i_set", 0.0)
+            except Exception as e:
+                print(f"{YELLOW}Warning: SAFE IDLE - failed to stop charger: {e}{RESET}")
+        self.current = 0.0
+
     def main_loop(self):
         taper_factor = 1.0  # default to no tapering
         try:
+            # SAFE IDLE: if the P1 meter data is stale (unplugged meter,
+            # serial failure), do NOT regulate against old values.
+            # Zero all outputs, warn, and skip this cycle. The loop keeps
+            # running (and resetting the software watchdog) while the
+            # meter's reader thread retries in the background.
+            if not self.meter.is_fresh():
+                self._safe_idle("STALE METER DATA")
+                return None
+
             #get data from metter P1
             import_p, export_p, L1, L2, L3 = (self.meter.get_power() + [0.0] * 8)[:5]
             # get data from riden
@@ -346,7 +386,7 @@ class SMainBat:
                     self.current= inv_power/self.v_out
                     
                 try:
-                    self.batclant.set_value("inverter", "set_power", double_inv_power)
+                    self._set_inverter_power(double_inv_power)
                 except Exception as e:
                     print(f"{YELLOW}Warning: Failed to set inverter power: {e}{RESET}")
                 
@@ -365,7 +405,7 @@ class SMainBat:
                     #electricly connect the Riden to the battery via PinDriver (active-low)
                     riden_pin_state = self.set_pindriver("connect")
 
-                    self.batclant.set_value("inverter", "set_power", 0)
+                    self._set_inverter_power(0)
 
                 except Exception as e:
                     print(f"{YELLOW}Warning: Failed to set inverter power to 0: {e}{RESET}")

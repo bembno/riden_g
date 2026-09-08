@@ -1,6 +1,5 @@
 # DSMR P1 reading
 version = "1.0"
-import sys
 import serial
 import re
 import time   # <--- Add this
@@ -23,9 +22,10 @@ class Meter:
 
         self._recent_parsed_data = []
         self._read_lock = threading.Lock()
-        self._serial_lock = threading.Lock()  # Protects serial port access
+        self._serial_lock = threading.RLock()  # RLock: read_telegram re-enters via connect()
         self._recent_p1_data = []
         self._ready = False
+        self._last_good_read = 0.0
         self._stop_event = threading.Event()
         self._periodic_thread = None
         self._import_history = []
@@ -49,7 +49,11 @@ class Meter:
                 print(f"Connected to DSMR P1 meter on {self.port}")
             except Exception as e:
                 self._ready = False  # Reset ready flag on connection failure
-                sys.exit(f"Error opening {self.port}: {e}")
+                # Raise instead of sys.exit(): sys.exit() in this background
+                # thread would kill only the reader, leaving the app running
+                # on stale cached data. The caller (periodic_read) handles
+                # the exception with backoff + reconnect.
+                raise
 
     def read_telegram(self):
         """Read until end of telegram (!) or timeout"""
@@ -170,11 +174,10 @@ class Meter:
             else:
                 values.append(0.0)
 
-        # Safe subtraction (import - export)
-        if len(values) == 8:
-            values[2] = (values[2] or 0.0) - (values[5] or 0.0)  # L1 import - export
-            values[3] = (values[3] or 0.0) - (values[6] or 0.0)  # L2 import - export
-            values[4] = (values[4] or 0.0) - (values[7] or 0.0)  # L3
+        # Note: values[2]/[3]/[4] are per-phase IMPORT power (OBIS 21/41/61.7.0).
+        # No subtraction is applied: per-phase export is not broadcast by most
+        # DSMR meters, and the previous code subtracted REACTIVE power (22/42/62.7.0),
+        # which is physically meaningless.
 
         return values
 
@@ -207,12 +210,19 @@ class Meter:
             data[0] = avg_import
 
             return data
-
     def periodic_read(self):
         """Background thread: reads DSMR telegram continuously."""
         while not self._stop_event.is_set():
             try:
                 parsed_data = self.read_telegram()
+
+                if not parsed_data:
+                    # Serial failure must NOT look like "0 W": keep the last
+                    # good cache, mark data stale, and let the retry loop
+                    # (below) reconnect.
+                    with self._read_lock:
+                        self._ready = False
+                    raise Exception("No telegram data received (serial failure?)")
 
                 values = self.get_listed_obis_values(parsed_data, [
                     '1-0:1:.7.0',
@@ -229,6 +239,7 @@ class Meter:
                     self._recent_p1_data = values
                     self._recent_parsed_data = parsed_data
                     self._ready = True  # Data is now available
+                    self._last_good_read = time.time()
 
             except Exception as e:
                 print(f"Error in periodic_read: {e}")
@@ -270,13 +281,31 @@ class Meter:
         """Start the meter (establish connection and begin reading thread).
         
         Explicit lifecycle control: not called automatically in __init__.
+        A failed initial connect is tolerated: the background thread keeps
+        retrying with backoff, so the app survives a meter that is absent
+        at boot. Use is_fresh()/wait_until_ready() to check progress.
         
         Returns:
             self: For method chaining.
         """
-        self.connect()  # Establish serial connection
+        try:
+            self.connect()  # Establish serial connection (best effort)
+        except Exception as e:
+            print(f"Initial meter connection failed ({e}); reader thread will retry")
         self.start_periodic_read()  # Start background thread
         return self
+
+    def is_fresh(self, max_age=10):
+        """Check if the cached data is recent enough to act on.
+
+        Args:
+            max_age (float): Maximum age in seconds since last good telegram.
+
+        Returns:
+            bool: True if a telegram was received within max_age seconds.
+        """
+        with self._read_lock:
+            return self._ready and (time.time() - self._last_good_read) <= max_age
 
     def is_ready(self):
         """Check if the meter has successfully read data at least once.

@@ -118,40 +118,32 @@ class RidenManager:
 
 
     def get_full_status(self):
-        """Update all internal state variables."""
+        """Update all internal state variables (single batched RPC)."""
         if not self.available:
             return False
 
         try:
-            self.v_set = self.batclant.get_value("riden", "get_v_set")
-            self.v_out = self.batclant.get_value("riden", "get_v_out")
-            self.i_out = self.batclant.get_value("riden", "get_i_out")
-            self.p_out = self.batclant.get_value("riden", "get_p_out")
-            self.v_in = self.batclant.get_value("riden", "get_v_in")
-            self.temp_int = self.batclant.get_value("riden", "get_int_c")
-            self.temp_ext = self.batclant.get_value("riden", "get_ext_c")
-            self.mode = self.batclant.get_value("riden", "get_cv_cc")
-            self.fault = self.batclant.get_value("riden", "get_ovp_ocp")
-            self.output = self.batclant.get_value("riden", "is_output")
-            self.ah = self.batclant.get_value("riden", "get_ah")
-            self.wh = self.batclant.get_value("riden", "get_wh")
+            # One batched RPC (server-side charger.update(), 2 Modbus reads)
+            # instead of 12 sequential MQTT round-trips.
+            status = self.batclant.get_value("riden", "get_status")
+            if not isinstance(status, dict):
+                raise Exception(f"Unexpected get_status result: {status}")
 
-            # Optional snapshot
-            self.status = {
-                "v_set": self.v_set,
-                "v_out": self.v_out,
-                "i_out": self.i_out,
-                "p_out": self.p_out,
-                "v_in": self.v_in,
-                "temp_int": self.temp_int,
-                "temp_ext": self.temp_ext,
-                "mode": self.mode,
-                "fault": self.fault,
-                "output": self.output,
-                "ah": self.ah,
-                "wh": self.wh,
-            }
-            
+            self.v_set = status.get("v_set")
+            self.v_out = status.get("v_out")
+            self.i_out = status.get("i_out")
+            self.p_out = status.get("p_out")
+            self.v_in = status.get("v_in")
+            self.temp_int = status.get("temp_int")
+            self.temp_ext = status.get("temp_ext")
+            self.mode = status.get("mode")
+            self.fault = status.get("fault")
+            self.output = status.get("output")
+            self.ah = status.get("ah")
+            self.wh = status.get("wh")
+
+            # Snapshot for compatibility/logging
+            self.status = dict(status)
 
             return True
 

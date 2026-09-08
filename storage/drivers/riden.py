@@ -42,9 +42,19 @@ class Riden:
         self.v_in_multi = 100
 
         self._open_serial()
-        self.init_device()
-        self._apply_device_profile()
-        self.update()
+        try:
+            self.init_device()
+            self._apply_device_profile()
+            self.update()
+        except Exception:
+            # Construction failed: release the serial port so the next
+            # reconnect attempt doesn't contend with a leaked handle.
+            try:
+                if self.serial:
+                    self.serial.close()
+            except Exception:
+                pass
+            raise
 
     # -------------------------------------------------
     # internal helpers (NEW, but private)
@@ -83,15 +93,17 @@ class Riden:
     # connection
     # -------------------------------------------------
     def _open_serial(self):
-        for i in range(5):
+        # Retry quickly; the DeviceServer monitor owns long-term reconnects,
+        # so blocking here for 25s would stall command handling.
+        for i in range(3):
             try:
                 self.serial = Serial(self.port, self.baudrate, timeout=self.timeout)
                 self.master = RtuMaster(self.serial)
                 self.master.set_timeout(self.timeout)
                 return
             except SerialException as e:
-                self._log(f"Serial open failed ({i+1}/5): {e}")
-                time.sleep(5)
+                self._log(f"Serial open failed ({i+1}/3): {e}")
+                time.sleep(1)
         raise SerialException("Cannot open serial port")
 
     def reconnect(self):
@@ -198,9 +210,20 @@ class Riden:
     # -------------------------------------------------
     # update (UNCHANGED LOGIC)
     # -------------------------------------------------
-    def update(self):
+    def update_fast(self):
+        """Fast status refresh: single Modbus block read (regs 4..20).
+
+        Updates all live-control values (v_set/v_out/i_out/p_out/v_in,
+        temps internal, mode, fault, output). Battery registers (32..41,
+        incl. ext temp + ah/wh) keep their last cached values - use the
+        regular update() to refresh those (slower, two block reads).
+        """
         data = (None,) * 4
-        data += self.read(R.INT_C_S, (R.I_RANGE - R.INT_C_S) + 1)
+        read_1 = self.read(R.INT_C_S, (R.I_RANGE - R.INT_C_S) + 1)
+
+        if read_1 is None:
+            raise ConnectionError("Riden unresponsive (register block 1 read failed)")
+        data += read_1
 
         if self.type == "RD6012P":
             self.i_multi = 10000 if data[R.I_RANGE] == 0 else 1000
@@ -221,9 +244,17 @@ class Riden:
         self.is_output(data[R.OUTPUT])
         self.get_preset(data[R.PRESET])
 
-        data += (None,) * 11
+    def update(self):
+        self.update_fast()
 
-        data += self.read(R.BAT_MODE, (R.WH_L - R.BAT_MODE) + 1)
+        # Pad so BAT_MODE lands at index 32 (matching register numbering)
+        data = (None,) * 32
+
+        read_2 = self.read(R.BAT_MODE, (R.WH_L - R.BAT_MODE) + 1)
+
+        if read_2 is None:
+            raise ConnectionError("Riden unresponsive (register block 2 read failed)")
+        data += read_2
 
         self.is_bat_mode(data[R.BAT_MODE])
         self.get_v_bat(data[R.V_BAT])

@@ -15,17 +15,18 @@ class Batclant:
         self.client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2 )  
         self.last_response = None
-        self.connected = False 
+        self.connected = False
         self._response_lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._pending_request_id = None
+        self._reconnecting = False  # Guard: only one reconnect thread at a time
         self.client.on_message = self._on_message
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
-        
+
         self._connect()
         self.client.loop_start()
-        
+
 
     def _connect(self):
         while True:
@@ -33,7 +34,7 @@ class Batclant:
                 self.client.connect(self.broker, self.port, 60)
                 break
             except Exception:
-                print("MQTT connect failed, retrying in 2s...")
+                print("MQTT connect failed, retrying in 1s...")
                 time.sleep(1)
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
@@ -56,24 +57,28 @@ class Batclant:
             if request_id is None or request_id == self._pending_request_id:
                 self.last_response = response
     
-    def _restart_mqtt(self):
-        try:
-            print("Restarting MQTT client loop...")
-            self.client.loop_stop()
-            self.client.disconnect()
-        except Exception:
-            pass
-        time.sleep(1)
-        self.client = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
-        self.client.on_message = self._on_message
-        self.client.on_connect = self._on_connect
-        self.client.on_disconnect = self._on_disconnect
-        with self._response_lock:
-            self.last_response = None
+    def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         self.connected = False
-        self.client.loop_start()
-        self._connect()
+        print(f"MQTT disconnected (code {reason_code}), reconnecting...")
+
+        if self._reconnecting:
+            # A reconnect thread is already running for this client
+            return
+        self._reconnecting = True
+
+        def try_reconnect():
+            try:
+                while not self.connected:
+                    try:
+                        self.client.reconnect()
+                    except Exception as e:
+                        print(f"Reconnect failed: {e}, retrying in 1s")
+                        time.sleep(1)
+                    time.sleep(1)
+            finally:
+                self._reconnecting = False
+
+        threading.Thread(target=try_reconnect, daemon=True).start()
 
     # ----------------------------
     # Generic send
@@ -107,23 +112,6 @@ class Batclant:
                 "message": f"Timeout waiting for response to {device}.{function}",
                 "request_id": request_id,
             }
-    
-    
-    def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
-        self.connected = False
-        print(f"MQTT disconnected (code {reason_code}), reconnecting...")
-
-        def try_reconnect():
-            while not self.connected:
-                try:
-                    self.client.reconnect()
-                except Exception as e:
-                    print(f"Reconnect failed: {e}, retrying in 1s")
-                    time.sleep(1)
-                time.sleep(1)
-
-        threading.Thread(target=try_reconnect, daemon=True).start()
-
 
     def set_value(self, device: str, function: str, value, timeout=5):
         """Set a value on a device (Riden or Inverter)."""
