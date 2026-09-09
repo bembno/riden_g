@@ -13,10 +13,11 @@ sleep 2
 screen -S a -dm bash -c 'cd /home/pi/Desktop/storage && exec python3 riden_inverter_server.py'
 
 # BMS BLE -> MQTT bridge (waits for bluetoothd, tolerates BT being slow at boot)
+# Logs go to storage/logs/bms_mqtt.log via RotatingFileHandler (capped size)
 for i in $(seq 1 12); do
     if bluetoothctl show >/dev/null 2>&1; then break; fi
     sleep 5
 done
-screen -S bms -dm bash -c 'cd /home/pi/Desktop/storage && exec python3 -u bms_mqtt.py > /tmp/bms_mqtt.log 2>&1'
+screen -S bms -dm bash -c 'cd /home/pi/Desktop/storage && exec python3 -u bms_mqtt.py'
 
 echo "Server started in screen session 'a'; BMS bridge in 'bms'"
