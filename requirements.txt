@@ -1,0 +1,19 @@
+# riden_g dependencies (Raspberry Pi OS, system python3)
+
+# Both Pis (storage + measurement)
+pyserial>=3.5
+paho-mqtt>=2.0          # server migrated to CallbackAPIVersion.VERSION2
+modbus_tk>=0.5.10        # storage Pi only (Riden charger driver)
+
+# Measurement Pi only
+mysql-connector-python>=8.0
+
+# Storage Pi only
+gpiozero>=1.6            # PinDriver relay (requires Raspberry Pi GPIO)
+
+# BMS BLE bridge (storage Pi)
+bleak>=0.21
+dbus-fast>=1.8
+
+# Not pip-installable on Pi OS: screen (apt), mosquitto (apt),
+# RPi.GPIO / lgpio backend used by gpiozero.

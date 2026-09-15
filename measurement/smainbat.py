@@ -4,6 +4,8 @@ import time
 from lib.PIDController import PIDController
 from lib.P1Storage import P1Storage
 from lib.riden_manager import RidenManager
+from lib.battery_guard import (BatteryGuard, MODE_NORMAL,
+                               MODE_BLOCK_DISCHARGE, MODE_BLOCK_CHARGE)
 import threading
 import os, sys
 import subprocess
@@ -34,6 +36,11 @@ if len(sys.argv) > 1:
         print(f"Using P_adding from CLI: {P_adding}")
     except ValueError:
         print(f"Invalid P_adding value '{sys.argv[1]}', using default {P_adding}")
+
+# Battery-guard policy: SOLAR-ONLY charging - the battery is never
+# charged from the grid. When the battery is at/below the empty floor,
+# discharge is blocked (inverter 0 W) and the only recovery is solar
+# surplus via the normal PID charge path.
 
 class SoftwareWatchdog:
     def __init__(self, timeout=60):
@@ -101,6 +108,12 @@ class SMainBat:
         
 
         self.riden = RidenManager(self.batclant, v_max_bat=self.Vmax_bat, check_interval=10.0)
+
+        # Battery guard: SOC/cell-voltage floors & ceilings override the
+        # PID when the battery is empty/full (MQTT subscription to bms_jk)
+        self.guard = BatteryGuard()
+        self.guard_mode = MODE_NORMAL
+        self._last_guard_mode = None
 
         # sw watchdog to ensure script restarts if it hangs for some reason (e.g. meter thread issues)
         self.sw_watchdog = SoftwareWatchdog(timeout=60)
@@ -203,11 +216,11 @@ class SMainBat:
 
 
 
-    def print_status_line(self, 
+    def print_status_line(self,
             import_p=0.0, export_p=0.0, power_diff=0.0, pid_power=0.0,
             L1=0.0, L2=0.0, L3=0.0,
             war_power=0.0, rid_P_out=0.0, current=0.0, v_out=0.0,taper_factor=1.0,
-            riden_pin_state=False
+            riden_pin_state=False, bms_soc=None, guard_mode=None
         ):
             """Prints a color-coded status line of system parameters (skips zeros)."""
 
@@ -246,6 +259,23 @@ class SMainBat:
             add("Te", self.temp_ext_c, fmt="{:.0f}")
             add("Ti", self.temp_int_c, fmt="{:.0f}")
             add("R_on", 1 if riden_pin_state else 0, fmt="{}")  # Show pin state as 1 or 0
+
+            # Battery guard + BMS SOC
+            if bms_soc is not None:
+                soc_color = RED if bms_soc <= 1 else YELLOW if bms_soc <= 50 else GREEN
+                parts.append(f"soc:{soc_color}{bms_soc}%{RESET}")
+            # BMS pack voltage (Vb) and lowest cell voltage (Vc)
+            bms_v = self.guard.battery_voltage()
+            bms_vc = self.guard.cell_low()
+            if bms_v is not None:
+                vb_color = RED if bms_v <= 45.0 else YELLOW if bms_v <= 47.0 else RESET
+                parts.append(f"Vb:{vb_color}{bms_v:.2f}{RESET}")
+            if bms_vc is not None:
+                vc_color = RED if bms_vc <= 2.81 else YELLOW if bms_vc <= 3.00 else RESET
+                parts.append(f"Vc:{vc_color}{bms_vc:.3f}{RESET}")
+            if guard_mode and guard_mode != "normal":
+                gm_color = BRIGHT_RED if guard_mode == "block_discharge" else YELLOW
+                parts.append(f"guard:{gm_color}{guard_mode}{RESET}")
             print(" ".join(parts))
 
             # Log to database only if connection is available
@@ -265,7 +295,9 @@ class SMainBat:
                         v_out=v_out,
                         temp_ext_c=self.temp_ext_c,
                         temp_int_c=self.temp_int_c,
-                        riden_pin_state=riden_pin_state
+                        riden_pin_state=riden_pin_state,
+                        bms_soc=bms_soc,
+                        guard_mode=guard_mode
                     )
 
                     parsed =self.meter.get_recent_parsed()
@@ -282,8 +314,11 @@ class SMainBat:
 
     def _set_inverter_power(self, power_w):
         """Send inverter set_power only when the value changed beyond the
-        deadband. Zero is ALWAYS sent (safety). Returns True if sent."""
+        deadband. Transitions TO zero are ALWAYS sent (safety); staying at
+        zero is skipped. Returns True if sent."""
         power_w = round(float(power_w))
+        if self._last_inv_sent == power_w:
+            return False  # unchanged (incl. 0 -> 0): nothing to do
         if (self._last_inv_sent is not None and power_w != 0
                 and abs(power_w - self._last_inv_sent) < self.inv_deadband_w):
             return False
@@ -295,15 +330,30 @@ class SMainBat:
             print(f"{YELLOW}Warning: Failed to set inverter power: {e}{RESET}")
             return False
 
+    def _set_charge_current(self, current_a):
+        """Send riden set_i_set only when the current changed meaningfully.
+        Zero is ALWAYS sent (safety); staying at the same value is skipped."""
+        current_a = round(float(current_a), 2)
+        last = getattr(self, "_last_i_set", None)
+        if last == current_a:
+            return False
+        if (last is not None and current_a != 0
+                and abs(current_a - last) < 0.5):
+            return False
+        try:
+            self.batclant.set_value("riden", "set_i_set", current_a)
+            self._last_i_set = current_a
+            return True
+        except Exception as e:
+            print(f"{YELLOW}Warning: Failed to set charge current: {e}{RESET}")
+            return False
+
     def _safe_idle(self, reason):
         """Zero all power outputs and log a warning (used on stale meter data)."""
         print(f"{BRIGHT_RED}SAFE IDLE: {reason} - zeroing outputs{RESET}")
         self._set_inverter_power(0)
         if self.riden.available:
-            try:
-                self.batclant.set_value("riden", "set_i_set", 0.0)
-            except Exception as e:
-                print(f"{YELLOW}Warning: SAFE IDLE - failed to stop charger: {e}{RESET}")
+            self._set_charge_current(0)
         self.current = 0.0
 
     def main_loop(self):
@@ -320,32 +370,17 @@ class SMainBat:
 
             #get data from metter P1
             import_p, export_p, L1, L2, L3 = (self.meter.get_power() + [0.0] * 8)[:5]
-            # get data from riden
-            if self.riden.available:
-                try:
-                    self.riden.get_full_status()
-                    if self.riden.v_set != self.Vmax_bat:
-                        self.riden.initialize()  # re-apply settings if we detect a change (e.g. after reset)
-                   
-                    self.temp_int_c = self.riden.temp_int
-                    self.temp_ext_c = self.riden.temp_ext
-                    self.v_out      = self.riden.v_out
-                    
-                    self.rid_P_out  = (self.riden.p_out or 0.0) / 1000.0
-                    
-                    if not self.riden.output:
-                            self.riden.set_output(True)
-
-                except Exception as e:
-                    print(f"{YELLOW}Warning: Failed to read Riden status: {e}{RESET}")
-                    self.riden.available = False
-                    self.temp_ext_c = 0.0
-                    self.temp_int_c = 0.0
-                    self.v_out = self.Vmax_bat
-            else:
-                self.temp_ext_c = 0.0
-                self.temp_int_c = 0.0
+            # Riden values come from the background monitor's cache
+            # (get_full_status runs there every check_interval; block reads
+            # take 1.5-3 s on this firmware and must not stall the loop).
+            # The monitor also re-applies v_set if it drifted from Vmax.
+            self.temp_int_c = self.riden.temp_int if self.riden.available else 0.0
+            self.temp_ext_c = self.riden.temp_ext if self.riden.available else 0.0
+            if self.riden.available and self.riden.v_out:
+                self.v_out = self.riden.v_out
+            elif not self.riden.available:
                 self.v_out = self.Vmax_bat
+            self.rid_P_out = (self.riden.p_out or 0.0) / 1000.0 if self.riden.available else 0.0
 
             
             # Adjust max current and min output based on riden temperature
@@ -363,8 +398,35 @@ class SMainBat:
                 # ---------------------
 
             # Check if battery is stuck at max voltage and reset PID if needed
-            self.pid.check_and_reset_if_stuck_at_max_v(self.riden.v_out)  
+            self.pid.check_and_reset_if_stuck_at_max_v(self.riden.v_out)
 
+            # Feed the guard's Riden fallback with the live pack voltage
+            # (v_out is battery-side when the relay is connected)
+            self.guard.set_riden_vbat(self.v_out if self.riden.available else None)
+
+            # ---- Battery guard override (solar-only policy) ----
+            # block_discharge -> battery at/below floor: the PID may only
+            #                   charge (solar surplus) or idle; the inverter
+            #                   is clamped to 0 W. NEVER import from grid.
+            # block_charge    -> battery full: the PID may only discharge;
+            #                   the charger is never used.
+            self.guard_mode = self.guard.mode()
+            if self.guard_mode != self._last_guard_mode:
+                print(f"{BRIGHT_RED}BATTERY GUARD: {self._last_guard_mode} -> "
+                      f"{self.guard_mode} (src: {self.guard.confidence()}, "
+                      f"soc: {self.guard.soc()}%){RESET}")
+                self._last_guard_mode = self.guard_mode
+
+            if self.guard_mode == MODE_BLOCK_CHARGE:
+                # Battery full: the PID may only discharge (inverter);
+                # clamp the charge direction so the charger is never used.
+                if self.min_output < 0.0:
+                    self.min_output = 0.0
+            elif self.guard_mode == MODE_BLOCK_DISCHARGE:
+                # Battery empty: the PID may only charge (solar surplus
+                # only) or idle; clamp the discharge direction to zero.
+                if self.max_output > 0.0:
+                    self.max_output = 0.0
 
             power_diff = import_p - export_p-0.02 - P_adding
             if abs(power_diff) < 0.02:
@@ -392,12 +454,9 @@ class SMainBat:
                 
                 # Only control Riden if available
                 if self.riden.available:
-                    try:
-                        self.batclant.set_value("riden", "set_i_set", 0.0)
-
-                    except Exception as e:
-                        print(f"{YELLOW}Warning: Failed to control Riden: {e}{RESET}")
-                        self.riden.available = False
+                    self._set_charge_current(0)
+                    if self.riden.available is False:
+                        print(f"{YELLOW}Warning: Failed to control Riden{RESET}")
                     
             else:
                     # Charge via Riden (if available) or standby (if not)
@@ -434,7 +493,7 @@ class SMainBat:
 
 
                         #self.rid_P_out = (self.riden.p_out or 0.0) / 1000.0
-                        self.batclant.set_value("riden", "set_i_set", self.current)
+                        self._set_charge_current(self.current)
 
                     
 
@@ -449,7 +508,7 @@ class SMainBat:
                     # Riden unavailable - use fallback values
                     self.v_out = self.Vmax_bat
                     self.rid_P_out = 0.0
-                    #self.current = 0.0
+                    self.current = 0.0  # nothing is actually being charged
                     if self.riden.error_count <= 1:
                         print(f"{YELLOW}Riden unavailable - standby mode (error: {self.riden.last_error}){RESET}")
             
@@ -466,7 +525,9 @@ class SMainBat:
                 current=self.current,
                 v_out=self.v_out,
                 taper_factor=taper_factor,
-                riden_pin_state=riden_pin_state
+                riden_pin_state=riden_pin_state,
+                bms_soc=self.guard.soc(),
+                guard_mode=self.guard_mode
                 )
             
             return import_p,\
@@ -511,10 +572,11 @@ class SMainBat:
             # Stop background threads
             self.riden.stop_monitor()
             self.sw_watchdog.alive = False
-            
+            self.guard.close()
+
             # Wait a bit for threads to finish
             time.sleep(0.2)
-            
+
             self.batclant.close()
             if self.storage is not None:
                 self.storage.close()
@@ -524,6 +586,11 @@ class SMainBat:
 
 
 if __name__ == "__main__":
+    # Persistent, bounded log alongside the console output (R2)
+    from lib.log_tee import tee_stdout_to_file
+    tee_stdout_to_file("smainbat",
+                       os.path.dirname(os.path.abspath(__file__)))
+
     # Initialize and run
     controller = SMainBat()
 

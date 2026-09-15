@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Runtime state
+storage/.pin_state
+logs/
+
+# OS noise
+Thumbs.db
+.DS_Store

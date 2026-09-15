@@ -28,7 +28,9 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from logging.handlers import RotatingFileHandler
 
 import paho.mqtt.client as mqtt
@@ -57,6 +59,12 @@ LOG_MAX_BYTES = int(os.environ.get("BMS_LOG_MAXBYTES", str(1024 * 1024)))
 LOG_BACKUPS = int(os.environ.get("BMS_LOG_BACKUPS", "2"))
 
 MAX_BACKOFF = 300.0
+# Hard deadline for one BLE read cycle. bleak/BlueZ DBus calls can hang
+# indefinitely (observed in production: bridge silent for 10 h); this
+# watchdog restarts the process to clear the stuck BlueZ state.
+READ_HARD_TIMEOUT = 120.0
+# Consecutive hard timeouts before a full process restart
+RESTART_AFTER_HARD_TIMEOUTS = 2
 
 # --- console colors (stripped from the file log by _PlainFormatter) ---
 RESET = "\033[0m"
@@ -184,6 +192,26 @@ def status_lines(p: dict, colored: bool = True):
     return line1, line2
 
 
+def read_live_with_timeout(mac, pin, timeout=READ_HARD_TIMEOUT):
+    """Run a BLE read with a hard deadline.
+
+    The executor thread is daemon=True, so a hung DBus call cannot keep
+    the process alive at exit; on timeout we raise so the caller decides
+    whether to restart the process.
+    """
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(read_live, mac, pin=pin)
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            raise TimeoutError(
+                f"BLE read exceeded {timeout}s (BlueZ/DBus hang?)")
+        finally:
+            # Leak the worker thread on timeout - it may be stuck in an
+            # uninterruptible DBus call; the process restart cleans up.
+            pass
+
+
 def main():
     log = setup_logging()
 
@@ -197,16 +225,37 @@ def main():
              f"(max {LOG_MAX_BYTES}B x {LOG_BACKUPS + 1})")
 
     failures = 0
+    hard_timeouts = 0
     while True:
         start = time.monotonic()
         try:
-            readings = read_live(MAC, pin=PIN)
+            readings = read_live_with_timeout(MAC, PIN)
             payload = extract(readings)
             client.publish(TOPIC_STATUS, json.dumps(payload))
             line1, line2 = status_lines(payload)
             log.info(line1)
             log.info(line2)
             failures = 0
+            hard_timeouts = 0
+        except TimeoutError as te:
+            # bleak hung on a DBus call - retrying in-process often stays
+            # stuck; restart the whole process after N consecutive hangs
+            # (os.execv keeps the same screen session and logs).
+            hard_timeouts += 1
+            log.error(f"BLE HARD TIMEOUT ({hard_timeouts}/"
+                      f"{RESTART_AFTER_HARD_TIMEOUTS}): {te}")
+            if hard_timeouts >= RESTART_AFTER_HARD_TIMEOUTS:
+                log.error("RESTARTING bms_mqtt process to clear BlueZ state")
+                try:
+                    client.publish(TOPIC_ONLINE, "0", retain=True)
+                    client.loop_stop()
+                    client.disconnect()
+                except Exception:
+                    pass
+                time.sleep(1)
+                os.execv(sys.executable, [sys.executable, "-u"] + sys.argv)
+            time.sleep(POLL_INTERVAL)
+            continue
         except Exception as e:
             failures += 1
             backoff = min(POLL_INTERVAL * (1 + failures), MAX_BACKOFF)

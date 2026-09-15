@@ -73,10 +73,12 @@ class Riden:
             self.serial.reset_input_buffer()
             self.serial.reset_output_buffer()
 
-    def _exec(self, func, retries=3, delay=0.2):
+    def _exec(self, func, retries=2, delay=0.2):
         """
         Central retry + reconnect handler
         preserves original behavior but removes duplication
+        (2 retries keep the worst-case per-op wait short; the server
+        monitor owns longer-term reconnection)
         """
         for i in range(retries):
             try:

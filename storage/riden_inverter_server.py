@@ -310,6 +310,7 @@ class DeviceServer:
                 "result": {
                     "v_set": self.charger.v_set,
                     "v_out": self.charger.v_out,
+                    "v_bat": getattr(self.charger, "v_bat", None),
                     "i_out": self.charger.i_out,
                     "p_out": self.charger.p_out,
                     "v_in": self.charger.v_in,
@@ -445,9 +446,12 @@ class DeviceServer:
     # ------------------------------------------------------------
     # MQTT
     # ------------------------------------------------------------
-    def on_connect(self, client, userdata, flags, rc):
-        print("MQTT connected:", rc)
-        client.subscribe(TOPIC_CMD)
+    def on_connect(self, client, userdata, flags, reason_code, properties):
+        if reason_code == 0:
+            print("MQTT connected")
+            client.subscribe(TOPIC_CMD)
+        else:
+            print(f"MQTT connect failed: {reason_code}")
 
     def on_message(self, client, userdata, msg):
         # Extract request_id defensively BEFORE dispatch so the error path
@@ -501,7 +505,7 @@ class DeviceServer:
         # MQTT
         print(f"Connecting to MQTT broker at {BROKER}:{PORT}...")
         try:
-            client = mqtt.Client()
+            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
             client.on_connect = self.on_connect
             client.on_message = self.on_message
             client.connect(BROKER, PORT, 60)
@@ -513,4 +517,8 @@ class DeviceServer:
 
 
 if __name__ == "__main__":
+    # Persistent, bounded log alongside the console output (R2)
+    import sys
+    from log_tee import tee_stdout_to_file
+    tee_stdout_to_file("riden_server", os.path.dirname(os.path.abspath(__file__)))
     DeviceServer().start()

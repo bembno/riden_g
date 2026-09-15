@@ -3,7 +3,7 @@ import time
 
 
 class RidenManager:
-    def __init__(self, batclant, v_max_bat=57.5, check_interval=10.0):
+    def __init__(self, batclant, v_max_bat=57.5, check_interval=5.0):
         self.batclant = batclant
         self.Vmax_bat = v_max_bat
         self.check_interval = check_interval
@@ -16,6 +16,7 @@ class RidenManager:
 
         # Runtime values (FULL STATUS as class variables)
         self.v_out = None
+        self.v_bat = None
         self.i_out = None
         self.p_out = None
         self.v_in = None
@@ -55,11 +56,17 @@ class RidenManager:
             return False
 
     def _monitor_health(self):
-        print(f"[RidenHealthMonitor] Started - checking every {self.check_interval}s")
+        print(f"[RidenHealthMonitor] Started - checking every {self.check_interval}s "
+              f"(polls full status in the background; the control loop reads "
+              f"cached values and never blocks on Modbus)")
 
         while self.monitor_alive:
             try:
-                self.check_health()
+                # Health probe + cached status refresh in ONE background
+                # cycle: the slow block read (~1.5-3 s on this firmware)
+                # happens here, off the control-loop critical path.
+                if self.check_health():
+                    self.get_full_status()
             except Exception as e:
                 print(f"[RidenHealthMonitor] Unexpected error: {e}")
 
@@ -118,7 +125,12 @@ class RidenManager:
 
 
     def get_full_status(self):
-        """Update all internal state variables (single batched RPC)."""
+        """Update all internal state variables (single batched RPC).
+
+        Also re-applies safe settings if they drifted (v_set != Vmax or
+        output off) - this runs in the background monitor thread, keeping
+        such slow fixes off the control-loop critical path.
+        """
         if not self.available:
             return False
 
@@ -131,6 +143,7 @@ class RidenManager:
 
             self.v_set = status.get("v_set")
             self.v_out = status.get("v_out")
+            self.v_bat = status.get("v_bat")
             self.i_out = status.get("i_out")
             self.p_out = status.get("p_out")
             self.v_in = status.get("v_in")
@@ -144,6 +157,15 @@ class RidenManager:
 
             # Snapshot for compatibility/logging
             self.status = dict(status)
+
+            # Safety re-apply (was in the control loop; now off critical path)
+            if self.v_set is not None and self.v_set != self.Vmax_bat:
+                print("[RidenHealthMonitor] v_set drifted -> re-applying settings")
+                self.batclant.set_value("riden", "set_v_set", self.Vmax_bat)
+                self.batclant.set_value("riden", "set_cv_cc", 0)
+            if self.output is False:
+                self.batclant.set_value("riden", "set_output", True)
+                self.output = True
 
             return True
 
