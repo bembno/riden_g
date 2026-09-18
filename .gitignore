@@ -1,2 +1,15 @@
+# Python
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Runtime state
+storage/.pin_state
+logs/
+
+# OS noise
+Thumbs.db
+.DS_Store
+>>>>>>> 7f2f64d7f25d554a203e812ed5ef13df1d82cc93
