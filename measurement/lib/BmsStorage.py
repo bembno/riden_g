@@ -34,7 +34,7 @@ class BmsStorage:
         "discharge_mosfet": "discharge_mosfet",
     }
 
-    MAX_CELLS = 16
+    MAX_CELLS = 32
 
     def __init__(self, host, user, password, database, table="bms_jk"):
         self.table = table

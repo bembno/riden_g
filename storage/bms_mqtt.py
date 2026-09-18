@@ -26,7 +26,9 @@ Environment overrides:
 import json
 import logging
 import os
+import random
 import re
+import signal
 import sys
 import time
 from logging.handlers import RotatingFileHandler
@@ -57,6 +59,25 @@ LOG_MAX_BYTES = int(os.environ.get("BMS_LOG_MAXBYTES", str(1024 * 1024)))
 LOG_BACKUPS = int(os.environ.get("BMS_LOG_BACKUPS", "2"))
 
 MAX_BACKOFF = 300.0
+BACKOFF_JITTER = 5.0  # seconds
+
+_shutdown = False
+
+
+def _signal_handler(signum, frame):
+    global _shutdown
+    _shutdown = True
+
+
+def _on_connect(client, userdata, flags, reason_code, properties):
+    if reason_code == 0:
+        client.publish(TOPIC_ONLINE, "1", retain=True)
+    else:
+        logging.getLogger("bms").error(f"MQTT connect failed: {reason_code}")
+
+
+def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
+    logging.getLogger("bms").warning(f"MQTT disconnected (code {reason_code})")
 
 # --- console colors (stripped from the file log by _PlainFormatter) ---
 RESET = "\033[0m"
@@ -187,8 +208,13 @@ def status_lines(p: dict, colored: bool = True):
 def main():
     log = setup_logging()
 
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.will_set(TOPIC_ONLINE, "0", retain=True)  # LWT: daemon died
+    client.will_set(TOPIC_ONLINE, "0", retain=True)
+    client.on_connect = _on_connect
+    client.on_disconnect = _on_disconnect
     client.connect(BROKER, PORT, 60)
     client.loop_start()
     client.publish(TOPIC_ONLINE, "1", retain=True)
@@ -197,10 +223,12 @@ def main():
              f"(max {LOG_MAX_BYTES}B x {LOG_BACKUPS + 1})")
 
     failures = 0
-    while True:
+    while not _shutdown:
         start = time.monotonic()
         try:
             readings = read_live(MAC, pin=PIN)
+            if readings.cell is None:
+                raise RuntimeError("no cell frame in readings")
             payload = extract(readings)
             client.publish(TOPIC_STATUS, json.dumps(payload))
             line1, line2 = status_lines(payload)
@@ -209,10 +237,9 @@ def main():
             failures = 0
         except Exception as e:
             failures += 1
-            backoff = min(POLL_INTERVAL * (1 + failures), MAX_BACKOFF)
+            backoff = min(POLL_INTERVAL * (1 + failures) + random.uniform(0, BACKOFF_JITTER), MAX_BACKOFF)
             log.error(f"BMS READ FAILED (#{failures}): {e} | "
                       f"retrying in {backoff:.0f}s")
-            # Publish the outage so the logger / dashboards can see it
             try:
                 client.publish(TOPIC_STATUS, json.dumps({
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ",
@@ -226,6 +253,11 @@ def main():
 
         delay = max(0.0, POLL_INTERVAL - (time.monotonic() - start))
         time.sleep(delay)
+
+    log.info("Shutdown signal received, cleaning up...")
+    client.publish(TOPIC_ONLINE, "0", retain=True)
+    client.loop_stop()
+    client.disconnect()
 
 
 if __name__ == "__main__":

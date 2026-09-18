@@ -1,0 +1,10 @@
+access to local networks machines where code is inplemented:
+
+/home/pi/Desktop/prog/measurement
+pi@pi406 pasword: raspberry
+
+
+/home/pi/Desktop/storage
+pi@pi407 pasword: raspberry
+
+ssh to l3@192.168.2.33 pasword aaa

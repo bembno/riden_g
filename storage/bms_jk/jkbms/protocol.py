@@ -24,6 +24,8 @@ def build_command(cmd: int, data: bytes = b"") -> bytes:
 class FrameParser:
     """Incremental parser extracting CRC-valid 300-byte frames from a BLE byte stream."""
 
+    MAX_BUFFER = 600  # 2x frame size to prevent unbounded growth
+
     def __init__(self) -> None:
         self._buf = bytearray()
 
@@ -34,6 +36,8 @@ class FrameParser:
         partially received frames is discarded safely.
         """
         self._buf.extend(chunk)
+        if len(self._buf) > self.MAX_BUFFER:
+            del self._buf[: len(self._buf) - self.MAX_BUFFER]
         buf = self._buf
         frames: List[bytes] = []
         while True:

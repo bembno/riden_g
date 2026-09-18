@@ -22,6 +22,7 @@ Environment overrides:
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from logging.handlers import RotatingFileHandler
@@ -55,6 +56,12 @@ storage = None
 last_db_attempt = 0.0
 DB_RECONNECT_COOLDOWN = 5.0
 error_streak = 0
+_shutdown = False
+
+
+def _signal_handler(signum, frame):
+    global _shutdown
+    _shutdown = True
 
 
 def setup_logging():
@@ -135,6 +142,10 @@ def on_message(client, userdata, msg):
 
 def main():
     setup_logging()
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
@@ -143,7 +154,18 @@ def main():
     log.info(f"bms_db_logger: {BROKER}:{PORT}{TOPIC_STATUS} -> "
              f"{DB['database']}.bms_jk | log={LOG_FILE} "
              f"(max {LOG_MAX_BYTES}B x {LOG_BACKUPS + 1})")
-    client.loop_forever()
+
+    client.loop_start()
+    try:
+        while not _shutdown:
+            time.sleep(1)
+    finally:
+        log.info("Shutdown signal received, cleaning up...")
+        client.loop_stop()
+        client.disconnect()
+        global storage
+        if storage is not None:
+            storage.close()
 
 
 if __name__ == "__main__":
