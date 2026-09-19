@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS bms_jk (
     charge_mosfet           TINYINT(1)   DEFAULT NULL,
     discharge_mosfet        TINYINT(1)   DEFAULT NULL,
     errors                  VARCHAR(255) DEFAULT NULL,  -- comma-joined error list
-    -- cell voltages as columns for the (up to) 16 active cells
+    -- cell voltages as columns for the (up to) 32 active cells
     cell01 FLOAT DEFAULT NULL, cell02 FLOAT DEFAULT NULL,
     cell03 FLOAT DEFAULT NULL, cell04 FLOAT DEFAULT NULL,
     cell05 FLOAT DEFAULT NULL, cell06 FLOAT DEFAULT NULL,
@@ -33,5 +33,14 @@ CREATE TABLE IF NOT EXISTS bms_jk (
     cell11 FLOAT DEFAULT NULL, cell12 FLOAT DEFAULT NULL,
     cell13 FLOAT DEFAULT NULL, cell14 FLOAT DEFAULT NULL,
     cell15 FLOAT DEFAULT NULL, cell16 FLOAT DEFAULT NULL,
-    INDEX idx_created (created_at)
+    cell17 FLOAT DEFAULT NULL, cell18 FLOAT DEFAULT NULL,
+    cell19 FLOAT DEFAULT NULL, cell20 FLOAT DEFAULT NULL,
+    cell21 FLOAT DEFAULT NULL, cell22 FLOAT DEFAULT NULL,
+    cell23 FLOAT DEFAULT NULL, cell24 FLOAT DEFAULT NULL,
+    cell25 FLOAT DEFAULT NULL, cell26 FLOAT DEFAULT NULL,
+    cell27 FLOAT DEFAULT NULL, cell28 FLOAT DEFAULT NULL,
+    cell29 FLOAT DEFAULT NULL, cell30 FLOAT DEFAULT NULL,
+    cell31 FLOAT DEFAULT NULL, cell32 FLOAT DEFAULT NULL,
+    INDEX idx_created (created_at),
+    UNIQUE INDEX idx_bms_timestamp (bms_timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

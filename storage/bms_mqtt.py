@@ -33,9 +33,16 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from logging.handlers import RotatingFileHandler
 
 import paho.mqtt.client as mqtt
+
+try:
+    from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
 
 # jkbms library lives next to this script in the repo (storage/bms_jk)
 # or as a standalone checkout at /home/pi/Desktop/bms_jk on the Pi
@@ -61,8 +68,30 @@ LOG_MAX_BYTES = int(os.environ.get("BMS_LOG_MAXBYTES", str(1024 * 1024)))
 LOG_BACKUPS = int(os.environ.get("BMS_LOG_BACKUPS", "2"))
 
 MAX_BACKOFF = 300.0
-<<<<<<< HEAD
 BACKOFF_JITTER = 5.0  # seconds
+
+# Hard deadline for one BLE read cycle. bleak/BlueZ DBus calls can hang
+# indefinitely (observed in production: bridge silent for 10 h); this
+# watchdog restarts the process to clear the stuck BlueZ state.
+READ_HARD_TIMEOUT = 120.0
+# Consecutive hard timeouts before a full process restart
+RESTART_AFTER_HARD_TIMEOUTS = 2
+
+# Prometheus metrics
+if PROMETHEUS_AVAILABLE:
+    BLE_READS_TOTAL = Counter('bms_ble_reads_total', 'Total BLE read attempts', ['result'])
+    BLE_READ_DURATION = Histogram('bms_ble_read_duration_seconds', 'BLE read duration')
+    BLE_BACKOFF_SECONDS = Gauge('bms_ble_backoff_seconds', 'Current backoff duration')
+    MQTT_PUBLISH_TOTAL = Counter('bms_mqtt_publish_total', 'Total MQTT publishes', ['topic', 'result'])
+    BMS_VOLTAGE = Gauge('bms_battery_voltage', 'Battery voltage (V)')
+    BMS_CURRENT = Gauge('bms_battery_current', 'Battery current (A)')
+    BMS_SOC = Gauge('bms_soc', 'State of charge (%)')
+    BMS_CELL_DELTA_MV = Gauge('bms_cell_delta_mv', 'Cell voltage delta (mV)')
+    BMS_MOS_TEMP = Gauge('bms_mos_temperature', 'MOS temperature (C)')
+    BMS_BALANCE_CURRENT = Gauge('bms_balance_current', 'Balance current (A)')
+    BMS_CYCLES = Gauge('bms_cycles', 'Cycle count')
+    BMS_SOH = Gauge('bms_soh', 'State of health (%)')
+    BMS_ERRORS = Gauge('bms_errors', 'Number of active errors')
 
 _shutdown = False
 
@@ -81,14 +110,6 @@ def _on_connect(client, userdata, flags, reason_code, properties):
 
 def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
     logging.getLogger("bms").warning(f"MQTT disconnected (code {reason_code})")
-=======
-# Hard deadline for one BLE read cycle. bleak/BlueZ DBus calls can hang
-# indefinitely (observed in production: bridge silent for 10 h); this
-# watchdog restarts the process to clear the stuck BlueZ state.
-READ_HARD_TIMEOUT = 120.0
-# Consecutive hard timeouts before a full process restart
-RESTART_AFTER_HARD_TIMEOUTS = 2
->>>>>>> 7f2f64d7f25d554a203e812ed5ef13df1d82cc93
 
 # --- console colors (stripped from the file log by _PlainFormatter) ---
 RESET = "\033[0m"
@@ -253,22 +274,66 @@ def main():
              f"{BROKER}:{PORT}{TOPIC_STATUS} | log={LOG_FILE} "
              f"(max {LOG_MAX_BYTES}B x {LOG_BACKUPS + 1})")
 
+    # Start Prometheus metrics HTTP server
+    if PROMETHEUS_AVAILABLE:
+        METRICS_PORT = int(os.environ.get("BMS_METRICS_PORT", "9100"))
+
+        class MetricsHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/metrics":
+                    self.send_response(200)
+                    self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+                    self.end_headers()
+                    self.wfile.write(generate_latest())
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def log_message(self, format, *args):
+                pass  # Suppress default HTTP log
+
+        metrics_server = HTTPServer(("0.0.0.0", METRICS_PORT), MetricsHandler)
+        metrics_thread = threading.Thread(target=metrics_server.serve_forever, daemon=True)
+        metrics_thread.start()
+        log.info(f"Prometheus metrics on :{METRICS_PORT}/metrics")
+
     failures = 0
     while not _shutdown:
         start = time.monotonic()
         try:
+            read_start = time.monotonic()
             readings = read_live(MAC, pin=PIN)
             if readings.cell is None:
                 raise RuntimeError("no cell frame in readings")
 
             payload = extract(readings)
             client.publish(TOPIC_STATUS, json.dumps(payload))
+            if PROMETHEUS_AVAILABLE:
+                MQTT_PUBLISH_TOTAL.labels(topic=TOPIC_STATUS, result='success').inc()
+
             line1, line2 = status_lines(payload)
             log.info(line1)
             log.info(line2)
+
+            if PROMETHEUS_AVAILABLE:
+                BLE_READS_TOTAL.labels(result='success').inc()
+                BLE_READ_DURATION.observe(time.monotonic() - read_start)
+                cell = readings.cell
+                BMS_VOLTAGE.set(cell.battery_voltage_V)
+                BMS_CURRENT.set(cell.current_A)
+                BMS_SOC.set(cell.soc)
+                BMS_CELL_DELTA_MV.set(cell.delta_cell_mV)
+                BMS_MOS_TEMP.set(cell.mos_temp_C or 0)
+                BMS_BALANCE_CURRENT.set(cell.balance_current_A or 0)
+                BMS_CYCLES.set(cell.cycles or 0)
+                BMS_SOH.set(cell.soh or 0)
+                BMS_ERRORS.set(len(cell.errors or []))
+
             failures = 0
             hard_timeouts = 0
         except TimeoutError as te:
+            if PROMETHEUS_AVAILABLE:
+                BLE_READS_TOTAL.labels(result='timeout').inc()
             # bleak hung on a DBus call - retrying in-process often stays
             # stuck; restart the whole process after N consecutive hangs
             # (os.execv keeps the same screen session and logs).
@@ -290,6 +355,9 @@ def main():
         except Exception as e:
             failures += 1
             backoff = min(POLL_INTERVAL * (1 + failures) + random.uniform(0, BACKOFF_JITTER), MAX_BACKOFF)
+            if PROMETHEUS_AVAILABLE:
+                BLE_READS_TOTAL.labels(result='error').inc()
+                BLE_BACKOFF_SECONDS.set(backoff)
             log.error(f"BMS READ FAILED (#{failures}): {e} | "
                       f"retrying in {backoff:.0f}s")
             try:
@@ -298,6 +366,8 @@ def main():
                                                 time.gmtime()),
                     "error": str(e),
                 }))
+                if PROMETHEUS_AVAILABLE:
+                    MQTT_PUBLISH_TOTAL.labels(topic=TOPIC_STATUS, result='error').inc()
             except Exception as pe:
                 log.error(f"publish of error payload failed: {pe}")
             time.sleep(backoff)

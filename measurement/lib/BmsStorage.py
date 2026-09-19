@@ -136,7 +136,8 @@ class BmsStorage:
 
         columns = ", ".join(row.keys())
         placeholders = ", ".join(["%s"] * len(row))
-        sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders})"
+        updates = ", ".join([f"{col}=VALUES({col})" for col in row.keys() if col != "bms_timestamp"])
+        sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders}) ON DUPLICATE KEY UPDATE {updates}"
 
         try:
             self.cursor.execute(sql, list(row.values()))
