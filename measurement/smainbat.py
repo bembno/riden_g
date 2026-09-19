@@ -84,8 +84,8 @@ class SMainBat:
         self.temp_int_c = 0.0
         self.temp_ext_c = 0.0
         self.max_current=30.0
-        self.min_output=-1.6
-        self.max_output=1.6
+        self.min_output=-1.8
+        self.max_output=1.8
         self.temp_max_allowed=35.0
 
         self.db_host = "192.168.2.33"
@@ -387,10 +387,10 @@ class SMainBat:
             if self.temp_ext_c > self.temp_max_allowed:
                 print(f"{YELLOW}Warning: Riden external temperature high: {self.temp_ext_c}C{RESET}")
                 max_current_T = 30.0
-                self.min_output = -1.4
+                self.min_output = -1.5
             else:
                 max_current_T = self.max_current
-                self.min_output = -1.6
+                self.min_output = -1.8
 
 
                 # ---------------------
