@@ -134,13 +134,22 @@ class BmsStorage:
         if not row:
             return True  # nothing to insert
 
+        # Always include bms_timestamp in columns for the unique key
+        if "bms_timestamp" not in row and "timestamp" in payload:
+            row["bms_timestamp"] = payload["timestamp"]
+
         columns = ", ".join(row.keys())
         placeholders = ", ".join(["%s"] * len(row))
-        updates = ", ".join([f"{col}=VALUES({col})" for col in row.keys() if col != "bms_timestamp"])
+        # Use explicit column references instead of VALUES() function
+        update_cols = [col for col in row.keys() if col != "bms_timestamp"]
+        updates = ", ".join([f"{col}=%s" for col in update_cols])
         sql = f"INSERT INTO {self.table} ({columns}) VALUES ({placeholders}) ON DUPLICATE KEY UPDATE {updates}"
 
+        # Values for INSERT + values for UPDATE (same values repeated)
+        values = list(row.values()) + [row[col] for col in update_cols]
+
         try:
-            self.cursor.execute(sql, list(row.values()))
+            self.cursor.execute(sql, values)
         except Exception as e:
             # connection errors are re-checked silently (errno 2013/2006)
             if not (hasattr(e, "errno") and e.errno in (2013, 2006)):
