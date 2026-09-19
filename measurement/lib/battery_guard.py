@@ -30,23 +30,28 @@ import time
 import paho.mqtt.client as mqtt
 
 # ---------------- tunables ----------------
-# Minimum pack voltage policy: the battery may discharge down to 45 V
-# (2.81 V/cell on 16S) / 1% SOC; below that discharge is blocked.
-# SOLAR-ONLY: charging never comes from the grid.
-SOC_FLOOR = 1           # %  - at/below this: block discharge
-SOC_FLOOR_RECOVER = 12  # %  - release block-discharge at/above this
-SOC_CEIL = 95           # %  - at/above this: block charge
-SOC_CEIL_RECOVER = 90   # %  - release block charge below this
+# LiFePO4 16S (48V) voltage-based guard policy
+# Based on LiFePO4 SoC voltage chart (resting voltages):
+# 100% = 58.40V, 90% = 54.40V, 80% = 53.60V, 50% = 52.32V
+# 20% = 51.20V, 10% = 48.00V, 0% = 40.00V
 
-CELL_V_FLOOR = 2.81     # V  - per-cell floor  (45 V / 16S)
-CELL_V_FLOOR_RECOVER = 3.00  # V  - per-cell release (48 V / 16S)
-CELL_V_CEIL = 3.50      # V  - per-cell ceiling
-CELL_V_CEIL_RECOVER = 3.45
+# Discharge protection (empty)
+VBAT_FLOOR = 47.00      # V - block discharge at/ below 48V (10% - Recharge Now)
+VBAT_FLOOR_RECOVER = 51.20  # V - release block-discharge at/above 51.2V (20% - Low Battery)
 
-VBAT_FLOOR = 45.0       # V  - pack floor (Riden fallback signal)
-VBAT_FLOOR_RECOVER = 47.0  # V  - release block-discharge above this
-VBAT_CEIL = 57.0        # V  - pack ceiling
-VBAT_CEIL_RECOVER = 56.5  # V  - release block charge below this
+# Charge protection (full)
+VBAT_CEIL = 58.40       # V - block charge at/above 58.4V (100% - Full)
+VBAT_CEIL_RECOVER = 54.40   # V - release block-charge at/below 54.4V (90% - Resting Full)
+
+# Legacy SOC/Cell thresholds (deprecated, kept for backward compat but unused)
+SOC_FLOOR = 0
+SOC_FLOOR_RECOVER = 0
+SOC_CEIL = 100
+SOC_CEIL_RECOVER = 0
+CELL_V_FLOOR = 0
+CELL_V_FLOOR_RECOVER = 0
+CELL_V_CEIL = 0
+CELL_V_CEIL_RECOVER = 0
 
 BMS_STALE_AFTER = 300.0   # s - BMS data older than this = stale
 RIDEN_STALE_AFTER = 60.0  # s - Riden v_bat older than this = stale
@@ -134,35 +139,22 @@ class BatteryGuard:
                     <= RIDEN_STALE_AFTER)
 
     def mode(self):
-        """Current override mode with latched hysteresis.
+        """Current override mode with latched hysteresis - VOLTAGE ONLY.
 
         Engage (from normal):   empty -> BLOCK_DISCHARGE, full -> BLOCK_CHARGE
-        Release (from latched): BLOCK_DISCHARGE at the *_RECOVER thresholds,
-                                BLOCK_CHARGE at its *_RECOVER thresholds.
+        Release (from latched): BLOCK_DISCHARGE at VBAT_FLOOR_RECOVER,
+                                BLOCK_CHARGE at VBAT_CEIL_RECOVER.
         With no fresh signal at all, the latched mode persists (an empty
         battery stays discharge-blocked even if telemetry drops out).
         """
-        # --- 1. BMS data path (preferred) ---
+        # --- 1. BMS data path (preferred) - voltage only ---
         if self._bms_fresh():
             with self._lock:
-                soc = self._bms.get("soc")
-                cells = self._bms.get("cells") or []
-                low_v = self._bms.get("cell_low_V")
-                high_v = self._bms.get("cell_high_V")
-            if cells:
-                active = [c for c in cells if c]
-                if active:
-                    low_v = min(active)
-                    high_v = max(active)
-
-            empty = ((soc is not None and soc <= SOC_FLOOR)
-                     or (low_v is not None and low_v <= CELL_V_FLOOR))
-            recover_empty = ((soc is not None and soc >= SOC_FLOOR_RECOVER)
-                             and (low_v is None or low_v >= CELL_V_FLOOR_RECOVER))
-            full = ((soc is not None and soc >= SOC_CEIL)
-                    or (high_v is not None and high_v >= CELL_V_CEIL))
-            recover_full = ((soc is not None and soc <= SOC_CEIL_RECOVER)
-                            and (high_v is None or high_v <= CELL_V_CEIL_RECOVER))
+                vbat = self._bms.get("battery_voltage_V")
+            empty = vbat is not None and vbat <= VBAT_FLOOR
+            recover_empty = vbat is not None and vbat >= VBAT_FLOOR_RECOVER
+            full = vbat is not None and vbat >= VBAT_CEIL
+            recover_full = vbat is not None and vbat <= VBAT_CEIL_RECOVER
 
         # --- 2. Riden v_bat fallback ---
         elif self._riden_fresh():
