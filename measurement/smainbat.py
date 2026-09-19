@@ -71,7 +71,7 @@ class SMainBat:
         self.Vmax_bat=57.5
         self.vmin_bat=46.0
         
-        self.pid = PIDController(kp=2.5, ki=0.05, kd=0.05,Vmin=self.vmin_bat, Vmax=self.Vmax_bat, setpoint=0.0, max_change_ratio=1.0)
+        self.pid = PIDController(kp=1.2, ki=0.03, kd=0.15, Vmin=self.vmin_bat, Vmax=self.Vmax_bat, setpoint=0.0, max_change_ratio=0.15)
         
         if not self.meter.wait_until_ready(timeout=5):
                     print("Warning: meter did not become ready within 5 seconds")
@@ -84,8 +84,8 @@ class SMainBat:
         self.temp_int_c = 0.0
         self.temp_ext_c = 0.0
         self.max_current=30.0
-        self.min_output=-1.8
-        self.max_output=1.8
+        self.min_output=-1.6
+        self.max_output=1.6
         self.temp_max_allowed=35.0
 
         self.db_host = "192.168.2.33"
@@ -384,13 +384,13 @@ class SMainBat:
 
             
             # Adjust max current and min output based on riden temperature
-            if self.temp_ext_c>self.temp_max_allowed:
+            if self.temp_ext_c > self.temp_max_allowed:
                 print(f"{YELLOW}Warning: Riden external temperature high: {self.temp_ext_c}C{RESET}")
-                max_current_T=30.0
-                self.min_output=-1.500
+                max_current_T = 30.0
+                self.min_output = -1.4
             else:
-                max_current_T=self.max_current
-                self.min_output=-1.8
+                max_current_T = self.max_current
+                self.min_output = -1.6
 
 
                 # ---------------------
