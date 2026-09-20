@@ -36,7 +36,7 @@ import paho.mqtt.client as mqtt
 # 20% = 51.20V, 10% = 48.00V, 0% = 40.00V
 
 # Discharge protection (empty)
-VBAT_FLOOR = 47.00      # V - block discharge at/ below 48V (10% - Recharge Now)
+VBAT_FLOOR = 46.00      # V - block discharge at/ below 48V (10% - Recharge Now)
 VBAT_FLOOR_RECOVER = 51.20  # V - release block-discharge at/above 51.2V (20% - Low Battery)
 
 # Charge protection (full)
