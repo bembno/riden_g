@@ -151,100 +151,104 @@ class DeviceServer:
         """
         print("Device monitor active...")
         while True:
-            # --- Charger: reconnect if missing or unresponsive ---
-            with self._charger_lock:
-                charger_needs_reconnect = (
-                    self.charger is None or not self.charger.is_connected()
-                )
-                # Port open but device silent (relay off): probe it
-                if (not charger_needs_reconnect
-                        and self._charger_probe_fails < 6):
+            try:
+                # --- Charger: reconnect if missing or unresponsive ---
+                with self._charger_lock:
+                    charger_needs_reconnect = (
+                        self.charger is None or not self.charger.is_connected()
+                    )
+                    # Port open but device silent (relay off): probe it
+                    if (not charger_needs_reconnect
+                            and self._charger_probe_fails < 6):
+                        try:
+                            probe = self.charger.read(0, 1)
+                        except Exception:
+                            probe = None
+                        if probe is None:
+                            self._charger_probe_fails += 1
+                            if self._charger_probe_fails >= 6:  # ~1 min of failures
+                                print("Charger unresponsive ~60s -> dropping connection (relay off?)")
+                                old = self.charger
+                                self.charger = None
+                                self.charger_required = False
+                                try:
+                                    if old is not None and old.serial:
+                                        old.serial.close()
+                                except Exception:
+                                    pass
+                        else:
+                            if self._charger_probe_fails > 0:
+                                print("Charger responsive again (probe OK)")
+                            self._charger_probe_fails = 0
+
+                if charger_needs_reconnect:
+                    print("Charger not connected, attempting reconnect...")
+                    temp_charger = None
                     try:
-                        probe = self.charger.read(0, 1)
-                    except Exception:
-                        probe = None
-                    if probe is None:
-                        self._charger_probe_fails += 1
-                        if self._charger_probe_fails >= 6:  # ~1 min of failures
-                            print("Charger unresponsive ~60s -> dropping connection (relay off?)")
+                        # Try fresh connection (outside lock)
+                        temp_charger = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)
+                        # Test responsiveness
+                        test = temp_charger.read(0, 1)
+                        if test is None:
+                            raise Exception("Reconnected device not responsive")
+
+                        # Update state while holding lock; close old serial first
+                        with self._charger_lock:
                             old = self.charger
-                            self.charger = None
-                            self.charger_required = False
+                            self.charger = temp_charger
+                            self.charger_required = True
+                            self._charger_probe_fails = 0
+                        temp_charger = None  # ownership transferred
+                        if old is not None:
                             try:
-                                if old is not None and old.serial:
+                                if old.serial:
                                     old.serial.close()
                             except Exception:
                                 pass
-                    else:
-                        if self._charger_probe_fails > 0:
-                            print("Charger responsive again (probe OK)")
-                        self._charger_probe_fails = 0
+                        print("Charger reconnected successfully.")
+                    except Exception as e:
+                        print(f"Charger reconnect failed: {e}")
+                        # Close the leaked serial handle from the failed attempt
+                        if temp_charger is not None:
+                            try:
+                                if temp_charger.serial:
+                                    temp_charger.serial.close()
+                            except Exception:
+                                pass
+                        with self._charger_lock:
+                            self.charger = None
 
-            if charger_needs_reconnect:
-                print("Charger not connected, attempting reconnect...")
-                temp_charger = None
-                try:
-                    # Try fresh connection (outside lock)
-                    temp_charger = Riden(port="/dev/ttyUSB0", baudrate=115200, address=1)
-                    # Test responsiveness
-                    test = temp_charger.read(0, 1)
-                    if test is None:
-                        raise Exception("Reconnected device not responsive")
-
-                    # Update state while holding lock; close old serial first
-                    with self._charger_lock:
-                        old = self.charger
-                        self.charger = temp_charger
-                        self.charger_required = True
-                        self._charger_probe_fails = 0
-                    temp_charger = None  # ownership transferred
-                    if old is not None:
-                        try:
-                            if old.serial:
-                                old.serial.close()
-                        except Exception:
-                            pass
-                    print("Charger reconnected successfully.")
-                except Exception as e:
-                    print(f"Charger reconnect failed: {e}")
-                    # Close the leaked serial handle from the failed attempt
-                    if temp_charger is not None:
-                        try:
-                            if temp_charger.serial:
-                                temp_charger.serial.close()
-                        except Exception:
-                            pass
-                    with self._charger_lock:
-                        self.charger = None
-
-            # --- Inverter: retry connection while missing ---
-            with self._inverter_lock:
-                inverter_missing = self.inverter is None
-            if inverter_missing:
-                print("Inverter not connected, attempting reconnect...")
-                # Try primary port, then fallback (same logic as connect_inverter)
-                temp_inverter = self._try_connect(
-                    "inverter", lambda: self._init_inverter("/dev/ttyUSB1"))
-                if temp_inverter is None:
+                # --- Inverter: retry connection while missing ---
+                with self._inverter_lock:
+                    inverter_missing = self.inverter is None
+                if inverter_missing:
+                    print("Inverter not connected, attempting reconnect...")
+                    # Try primary port, then fallback (same logic as connect_inverter)
                     temp_inverter = self._try_connect(
-                        "inverter", lambda: self._init_inverter("/dev/ttyUSB0"))
-                if temp_inverter is not None:
-                    with self._inverter_lock:
-                        self.inverter = temp_inverter
-                    print("Inverter reconnected successfully.")
+                        "inverter", lambda: self._init_inverter("/dev/ttyUSB1"))
+                    if temp_inverter is None:
+                        temp_inverter = self._try_connect(
+                            "inverter", lambda: self._init_inverter("/dev/ttyUSB0"))
+                    if temp_inverter is not None:
+                        with self._inverter_lock:
+                            self.inverter = temp_inverter
+                        print("Inverter reconnected successfully.")
 
-            # --- PinDriver: retry connection while missing ---
-            with self._pin_lock:
-                pin_missing = self.pindriver is None
-            if pin_missing:
-                try:
-                    temp_pin = self._try_connect("pindriver", lambda: PinDriver(17))
-                    if temp_pin is not None:
-                        with self._pin_lock:
-                            self.pindriver = temp_pin
-                        print("PinDriver reconnected successfully.")
-                except Exception as e:
-                    print(f"PinDriver reconnect failed: {e}")
+                # --- PinDriver: retry connection while missing ---
+                with self._pin_lock:
+                    pin_missing = self.pindriver is None
+                if pin_missing:
+                    try:
+                        temp_pin = self._try_connect("pindriver", lambda: PinDriver(17))
+                        if temp_pin is not None:
+                            with self._pin_lock:
+                                self.pindriver = temp_pin
+                            print("PinDriver reconnected successfully.")
+                    except Exception as e:
+                        print(f"PinDriver reconnect failed: {e}")
+
+            except Exception as e:
+                print(f"monitor_devices error: {e}")
 
             time.sleep(10)  # Check every 10 seconds (adjust as needed)
 
@@ -393,53 +397,57 @@ class DeviceServer:
     def watchdog(self):
         print("Watchdog active...")
         while True:
-            silence = time.time() - self.last_client_msg
+            try:
+                silence = time.time() - self.last_client_msg
 
-            if silence <= WATCHDOG_TIMEOUT:
-                # Healthy: reset the escalation state
-                self._no_charger_warned = False
-                self._watchdog_silence_start = None
-                self._safety_off_done = False
-                time.sleep(CHECK_INTERVAL)
-                continue
+                if silence <= WATCHDOG_TIMEOUT:
+                    # Healthy: reset the escalation state
+                    self._no_charger_warned = False
+                    self._watchdog_silence_start = None
+                    self._safety_off_done = False
+                    time.sleep(CHECK_INTERVAL)
+                    continue
 
-            # ---- Silence exceeds 60s: escalate ----
-            if self._watchdog_silence_start is None:
-                self._watchdog_silence_start = time.time()
+                # ---- Silence exceeds 60s: escalate ----
+                if self._watchdog_silence_start is None:
+                    self._watchdog_silence_start = time.time()
 
-            with self._charger_lock:
-                charger_ok = self.charger is not None and self.charger.is_connected()
+                with self._charger_lock:
+                    charger_ok = self.charger is not None and self.charger.is_connected()
 
-            if not self._safety_off_done:
-                # Stage 1 (once): safety-off all outputs, but stay alive.
-                # The measurement client may just be restarting; give it a
-                # grace window before considering a reboot.
-                if self.charger_required:
-                    print(f"WATCHDOG: no client for {silence:.0f}s -> SAFETY OFF (reboot in {WATCHDOG_REBOOT_TIMEOUT - (time.time() - self._watchdog_silence_start):.0f}s if silence continues)")
-                    try:
-                        if self.inverter is not None:
-                            self.inverter.ModifyPower(0)
+                if not self._safety_off_done:
+                    # Stage 1 (once): safety-off all outputs, but stay alive.
+                    # The measurement client may just be restarting; give it a
+                    # grace window before considering a reboot.
+                    if self.charger_required:
+                        print(f"WATCHDOG: no client for {silence:.0f}s -> SAFETY OFF (reboot in {WATCHDOG_REBOOT_TIMEOUT - (time.time() - self._watchdog_silence_start):.0f}s if silence continues)")
+                        try:
+                            if self.inverter is not None:
+                                self.inverter.ModifyPower(0)
 
-                        if charger_ok:
-                            self.charger.set_output(False)
+                            if charger_ok:
+                                self.charger.set_output(False)
 
-                    except Exception as e:
-                        print(f"WATCHDOG safety shutdown failed: {e}")
-                else:
-                    # Inverter-only mode is a legitimate steady state:
-                    # warn once per silence period, no reboot.
-                    if not self._no_charger_warned:
-                        print("WATCHDOG: no charger required -> inverter safe mode only")
-                        self._no_charger_warned = True
-                self._safety_off_done = True
+                        except Exception as e:
+                            print(f"WATCHDOG safety shutdown failed: {e}")
+                    else:
+                        # Inverter-only mode is a legitimate steady state:
+                        # warn once per silence period, no reboot.
+                        if not self._no_charger_warned:
+                            print("WATCHDOG: no charger required -> inverter safe mode only")
+                            self._no_charger_warned = True
+                    self._safety_off_done = True
 
-            # Stage 2 (after continuous silence): reboot only if the silence
-            # persisted the full window AND a charger is part of the system.
-            if (self.charger_required
-                    and time.time() - self._watchdog_silence_start >= WATCHDOG_REBOOT_TIMEOUT):
-                print("WATCHDOG: silence persisted 5 min -> REBOOTING SYSTEM NOW")
-                #os.system("/sbin/reboot")
-                subprocess.call(["sudo", "reboot"])
+                # Stage 2 (after continuous silence): reboot only if the silence
+                # persisted the full window AND a charger is part of the system.
+                if (self.charger_required
+                        and time.time() - self._watchdog_silence_start >= WATCHDOG_REBOOT_TIMEOUT):
+                    print("WATCHDOG: silence persisted 5 min -> REBOOTING SYSTEM NOW")
+                    #os.system("/sbin/reboot")
+                    subprocess.call(["sudo", "reboot"])
+
+            except Exception as e:
+                print(f"watchdog error: {e}")
 
             time.sleep(CHECK_INTERVAL)
 

@@ -298,11 +298,12 @@ def main():
         log.info(f"Prometheus metrics on :{METRICS_PORT}/metrics")
 
     failures = 0
+    hard_timeouts = 0
     while not _shutdown:
         start = time.monotonic()
         try:
             read_start = time.monotonic()
-            readings = read_live(MAC, pin=PIN)
+            readings = read_live_with_timeout(MAC, pin=PIN)
             if readings.cell is None:
                 raise RuntimeError("no cell frame in readings")
 
@@ -330,7 +331,6 @@ def main():
                 BMS_ERRORS.set(len(cell.errors or []))
 
             failures = 0
-            hard_timeouts = 0
         except TimeoutError as te:
             if PROMETHEUS_AVAILABLE:
                 BLE_READS_TOTAL.labels(result='timeout').inc()

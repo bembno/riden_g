@@ -78,16 +78,16 @@ class BatteryGuard:
         # hysteresis band instead of a single chattering boundary.
         self._latched_mode = MODE_NORMAL
 
+        self._broker = broker
+        self._port = port
+        self._reconnect_backoff = 5.0
+        self._max_reconnect_backoff = 60.0
+
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
-        try:
-            self.client.connect(broker, port, 60)
-            self.client.loop_start()
-        except Exception as e:
-            print(f"BatteryGuard: MQTT connect failed ({e}); "
-                  f"will rely on Riden fallback only")
+        self._connect_with_retry()
 
     # ---------------- MQTT plumbing ----------------
     def _on_connect(self, client, userdata, flags, reason_code, properties):
@@ -101,6 +101,36 @@ class BatteryGuard:
     def _on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         with self._lock:
             self._connected = False
+        # Schedule reconnection
+        threading.Thread(target=self._reconnect_loop, daemon=True).start()
+
+    def _connect_with_retry(self):
+        """Initial connection with exponential backoff."""
+        backoff = self._reconnect_backoff
+        while True:
+            try:
+                self.client.connect(self._broker, self._port, 60)
+                self.client.loop_start()
+                return
+            except Exception as e:
+                print(f"BatteryGuard: MQTT connect failed ({e}); retrying in {backoff:.0f}s")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, self._max_reconnect_backoff)
+
+    def _reconnect_loop(self):
+        """Reconnection loop after disconnect."""
+        backoff = self._reconnect_backoff
+        while True:
+            try:
+                with self._lock:
+                    if self._connected:
+                        return
+                self.client.reconnect()
+                return
+            except Exception as e:
+                print(f"BatteryGuard: reconnect failed ({e}); retrying in {backoff:.0f}s")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, self._max_reconnect_backoff)
 
     def _on_message(self, client, userdata, msg):
         try:

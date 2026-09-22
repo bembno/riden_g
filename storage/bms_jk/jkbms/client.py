@@ -94,10 +94,15 @@ class JkBmsClient:
         if not dev:
             raise RuntimeError("device not found (asleep / out of range?)")
 
+        agent = None
         if self.bond:
-            self._agent = BlueZPairingAgent(self.pin)
-            await self._agent.pair(self.mac)
-            await asyncio.sleep(1)
+            agent = BlueZPairingAgent(self.pin)
+            try:
+                await agent.pair(self.mac)
+                await asyncio.sleep(1)
+            except Exception:
+                agent.close()
+                raise
 
         try:
             if commands is None:
@@ -133,9 +138,8 @@ class JkBmsClient:
                     await asyncio.sleep(0.2)
                 await client.stop_notify(CHR)
         finally:
-            if self._agent is not None:
-                self._agent.close()
-                self._agent = None
+            if agent is not None:
+                agent.close()
 
         missing = [t for t in required if t not in frames]
         if missing:
