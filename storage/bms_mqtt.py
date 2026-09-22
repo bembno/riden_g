@@ -32,7 +32,7 @@ import signal
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from logging.handlers import RotatingFileHandler
 
@@ -248,7 +248,7 @@ def read_live_with_timeout(mac, pin, timeout=READ_HARD_TIMEOUT):
         future = pool.submit(read_live, mac, pin=pin)
         try:
             return future.result(timeout=timeout)
-        except TimeoutError:
+        except FuturesTimeoutError:
             raise TimeoutError(
                 f"BLE read exceeded {timeout}s (BlueZ/DBus hang?)")
         finally:
