@@ -27,7 +27,7 @@ trigger a reset - see bms_watchdog.py for the threshold math.
 Environment overrides:
   BMS_MAC            BLE MAC of the JK BMS    (default C8:47:80:58:A3:A6)
   JK_PIN             bonding PIN              (default 1234)
-  BMS_POLL_SECONDS   poll interval            (default 30)
+  BMS_POLL_SECONDS   poll interval            (default 120 = every 2 min)
   BMS_BROKER         MQTT broker              (default 127.0.0.1)
   BMS_LOG_DIR        log directory            (default <script dir>/logs)
   BMS_LOG_MAXBYTES   rotate size in bytes     (default 1048576)
@@ -78,7 +78,7 @@ from bms_watchdog import (  # noqa: E402
 
 MAC = os.environ.get("BMS_MAC", "C8:47:80:58:A3:A6")
 PIN = os.environ.get("JK_PIN", "1234")
-POLL_INTERVAL = float(os.environ.get("BMS_POLL_SECONDS", "30"))
+POLL_INTERVAL = float(os.environ.get("BMS_POLL_SECONDS", "120"))
 BROKER = os.environ.get("BMS_BROKER", "127.0.0.1")
 PORT = 1883
 TOPIC_STATUS = "bms_jk/status"

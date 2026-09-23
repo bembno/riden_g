@@ -268,7 +268,7 @@ class SMainBat:
             bms_v = self.guard.battery_voltage()
             bms_vc = self.guard.cell_low()
             if bms_v is not None:
-                vb_color = RED if bms_v <= 45.0 else YELLOW if bms_v <= 47.0 else RESET
+                vb_color = RED if bms_v <= 46.0 else YELLOW if bms_v <= 47.0 else RESET
                 parts.append(f"Vb:{vb_color}{bms_v:.2f}{RESET}")
             if bms_vc is not None:
                 vc_color = RED if bms_vc <= 2.81 else YELLOW if bms_vc <= 3.00 else RESET

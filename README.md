@@ -10,7 +10,7 @@ PID loop drives the smart-meter import/export toward zero.
 | Pi | Path | Process | Role |
 |---|---|---|---|
 | pi407 (storage) | `/home/pi/Desktop/storage/` | `riden_inverter_server.py` (screen `a`) | MQTT device server: Riden charger (Modbus RTU, /dev/ttyUSB0), inverters (4800 baud, /dev/ttyUSB1), charge relay (GPIO17) |
-| pi407 | same | `bms_mqtt.py` (screen `bms`) | JK BMS BLE poller -> MQTT `bms_jk/status` every ~30 s |
+| pi407 | same | `bms_mqtt.py` (screen `bms`) | JK BMS BLE poller -> MQTT `bms_jk/status` every 2 min |
 | pi406 (measurement) | `/home/pi/Desktop/prog/measurement/` | `smainbat.py` (screen `a`) | Control loop: P1 meter reader, PID, battery guard, DB logging |
 | pi406 | same | `bms_db_logger.py` (screen `bms`) | `bms_jk/status` -> MariaDB `energy.bms_jk` |
 | pi406 | same | `db_maintenance.py` (cron 03:15) | retention: p1_data 7 d, t_logs 30 d, bms_jk 90 d |
@@ -22,11 +22,11 @@ MariaDB: 192.168.2.33 (l3PC laptop, not a Pi), database `energy` (tables p1_data
 ## Safety layers (outermost first)
 
 1. **Battery guard** (`lib/battery_guard.py`): SOLAR-ONLY charging policy -
-   the battery is never charged from the grid. SOC/cell-voltage floors and
-   ceilings from live BMS data; empty pack (<= 45 V / 5% SOC / 2.81 V cell)
-   -> discharge blocked (inverter 0 W; only solar surplus can recharge it),
-   full pack (>= 95% SOC / 3.50 V cell) -> charge blocked. Falls back to
-   Riden pack voltage when BMS data is >5 min stale.
+   the battery is never charged from the grid. Voltage-only guard on live
+   BMS data; empty pack (<= 46 V) -> discharge blocked (inverter 0 W;
+   only solar surplus can recharge it), released as soon as pack > 46 V;
+   full pack (>= 58.4 V) -> charge blocked (released <= 54.4 V). Falls
+   back to Riden pack voltage when BMS data is >5 min stale.
 2. **Watchdog escalation** (server): 60 s MQTT silence -> outputs off;
    5 min silence -> reboot (charger required) or inverter-only steady state.
 3. **Software watchdog** (loop): 60 s hang -> reboot.

@@ -92,7 +92,7 @@ bluetoothctl devices | grep C8:47:80:58:A3:A6
 |----------|---------|-------------|
 | `BMS_MAC` | C8:47:80:58:A3:A6 | BMS BLE MAC |
 | `JK_PIN` | 1234 | Bonding PIN |
-| `BMS_POLL_SECONDS` | 30 | Poll interval |
+| `BMS_POLL_SECONDS` | 120 | Poll interval (every 2 min) |
 | `BMS_BROKER` | 192.168.2.42 | MQTT broker (pi407) |
 | `BMS_LOG_DIR` | ./logs | Log directory |
 | `BMS_DIAG_HOURS` | 24 | abms_log.txt diagnostics window (hours) |

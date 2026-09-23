@@ -5,17 +5,14 @@ Charging only happens from house export (solar surplus) via the normal
 PID charge path.
 
 Subscribes to bms_jk/status on the broker (published by the storage Pi's
-bms_mqtt.py bridge every ~30 s). When the battery approaches empty or
-full, the guard overrides the grid-neutral PID decision:
+bms_mqtt.py bridge). When the battery is empty or full, the guard
+overrides the grid-neutral PID decision:
 
-  - empty (pack <= 45 V policy: SOC <= 1%, cell <= 2.81 V, or fallback
-    v_bat <= 45 V) -> block discharge (inverter stays at 0 W; charging
-    from solar surplus remains allowed and is the only recovery path).
-    Released at SOC >= 12% AND cells >= 3.00 V (fallback v_bat >= 47 V)
-    - latched hysteresis, so it never chatters at the boundary.
-  - full (SOC >= 95% or cell >= 3.50 V; fallback v_bat >= 57 V) ->
-    block charge. Released at SOC <= 90% / cells <= 3.45 V
-    (fallback: v_bat <= 56.5 V).
+  - empty (pack <= 46 V) -> block discharge (inverter stays at 0 W;
+    charging from solar surplus remains allowed and is the only
+    recovery path). Released as soon as pack > 46 V (no wide hysteresis:
+    above the floor, discharge is allowed again).
+  - full (pack >= 58.4 V) -> block charge. Released at pack <= 54.4 V.
   - data stale (> BMS_STALE_AFTER) -> fall back to Riden v_bat if
     fresh; if neither is fresh the last latched mode persists.
   - everything normal -> no override
@@ -36,8 +33,10 @@ import paho.mqtt.client as mqtt
 # 20% = 51.20V, 10% = 48.00V, 0% = 40.00V
 
 # Discharge protection (empty)
-VBAT_FLOOR = 46.00      # V - block discharge at/ below 48V (10% - Recharge Now)
-VBAT_FLOOR_RECOVER = 51.20  # V - release block-discharge at/above 51.2V (20% - Low Battery)
+# Above 46 V -> allow discharge; at/below 46 V -> block discharge.
+# Recover == floor: any reading > 46 V releases the block immediately.
+VBAT_FLOOR = 46.00         # V - block discharge at/below this
+VBAT_FLOOR_RECOVER = 46.00 # V - allow discharge again as soon as > this
 
 # Charge protection (full)
 VBAT_CEIL = 58.40       # V - block charge at/above 58.4V (100% - Full)
@@ -169,11 +168,12 @@ class BatteryGuard:
                     <= RIDEN_STALE_AFTER)
 
     def mode(self):
-        """Current override mode with latched hysteresis - VOLTAGE ONLY.
+        """Current override mode - VOLTAGE ONLY.
 
-        Engage (from normal):   empty -> BLOCK_DISCHARGE, full -> BLOCK_CHARGE
-        Release (from latched): BLOCK_DISCHARGE at VBAT_FLOOR_RECOVER,
-                                BLOCK_CHARGE at VBAT_CEIL_RECOVER.
+        Engage (from normal):   pack <= 46 V -> BLOCK_DISCHARGE,
+                                pack >= 58.4 V -> BLOCK_CHARGE.
+        Release:                BLOCK_DISCHARGE as soon as pack > 46 V;
+                                BLOCK_CHARGE at pack <= 54.4 V.
         With no fresh signal at all, the latched mode persists (an empty
         battery stays discharge-blocked even if telemetry drops out).
         """
