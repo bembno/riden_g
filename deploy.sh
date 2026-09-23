@@ -19,16 +19,19 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 deploy_bridge() {
     echo "=== Deploying bridge to pi407 ==="
     
-    # Copy main bridge script
+    # Copy main bridge script + watchdog decision logic
     scp -i "$BRIDGE_KEY" "$REPO_ROOT/storage/bms_mqtt.py" "$BRIDGE_USER@$BRIDGE_HOST:$BRIDGE_PATH/bms_mqtt.py"
+    scp -i "$BRIDGE_KEY" "$REPO_ROOT/storage/bms_watchdog.py" "$BRIDGE_USER@$BRIDGE_HOST:$BRIDGE_PATH/bms_watchdog.py"
     
-    # Copy protocol fix
+    # Copy protocol fix + instrumented client (LAST_DIAG phases)
     scp -i "$BRIDGE_KEY" "$REPO_ROOT/storage/bms_jk/jkbms/protocol.py" "$BRIDGE_USER@$BRIDGE_HOST:$BRIDGE_PATH/bms_jk/jkbms/protocol.py"
+    scp -i "$BRIDGE_KEY" "$REPO_ROOT/storage/bms_jk/jkbms/client.py" "$BRIDGE_USER@$BRIDGE_HOST:$BRIDGE_PATH/bms_jk/jkbms/client.py"
     
     # Restart bridge service
     ssh -i "$BRIDGE_KEY" "$BRIDGE_USER@$BRIDGE_HOST" "
         screen -S bms -X quit 2>/dev/null || true
         sleep 2
+        rm -rf $BRIDGE_PATH/bms_jk/jkbms/__pycache__
         cd $BRIDGE_PATH && screen -S bms -dm bash -c 'exec python3 -u bms_mqtt.py'
         sleep 3
         echo 'Bridge restarted. Status:'

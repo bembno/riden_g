@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
-from typing import AsyncIterator, Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Dict, AsyncIterator, List, NamedTuple, Optional, Sequence, Tuple
 
 from .constants import (CHR, CMD_CELL_INFO, CMD_DEVICE_INFO, CMD_LOGBOOK,
                         DEFAULT_MAC, DEFAULT_PIN)
@@ -32,6 +33,32 @@ except ImportError as _exc:  # pragma: no cover
     ) from _exc
 
 log = logging.getLogger("jkbms.client")
+
+# --- phase diagnostics for the watchdog / 24 h abms_log.txt test ---------
+# LAST_DIAG always describes the *latest* read attempt: which phase it is
+# in (find / pair / connect / notify / cmd / collect / done / error), how
+# long each phase took and which frames arrived.  When the bridge hangs,
+# the phase string shows exactly where it is stuck.  Updates are guarded
+# by a generation counter so a leaked worker from a previously timed-out
+# read cannot overwrite the current attempt's state.
+LAST_DIAG: Dict[str, Any] = {"phase": "idle"}
+_DIAG_LOCK = threading.Lock()
+_DIAG_GEN = 0
+
+
+def _diag_begin() -> int:
+    global _DIAG_GEN
+    with _DIAG_LOCK:
+        _DIAG_GEN += 1
+        LAST_DIAG.clear()
+        LAST_DIAG.update(gen=_DIAG_GEN, phase="find", t0=time.time())
+        return _DIAG_GEN
+
+
+def _diag_set(gen: int, **kw: Any) -> None:
+    with _DIAG_LOCK:
+        if gen == LAST_DIAG.get("gen"):
+            LAST_DIAG.update(kw)
 
 Command = Tuple[int, float]
 
@@ -87,65 +114,109 @@ class JkBmsClient:
         ``commands`` is a list of ``(cmd_byte, wait_s)`` sent in order
         (default: device info 0x97, then cell info 0x96). Returns a dict
         ``{frame_type: raw_300_byte_frame}``.
+
+        Phase timings are recorded in :data:`LAST_DIAG` as the read
+        progresses so a stuck read can be attributed to find / pair /
+        connect / notify / cmd / collect.
         """
         timeout = self.read_timeout if timeout is None else timeout
-        dev = await BleakScanner.find_device_by_address(self.mac,
-                                                        timeout=self.find_timeout)
-        if not dev:
-            raise RuntimeError("device not found (asleep / out of range?)")
-
-        agent = None
-        if self.bond:
-            agent = BlueZPairingAgent(self.pin)
-            try:
-                await agent.pair(self.mac)
-                await asyncio.sleep(1)
-            except Exception:
-                agent.close()
-                raise
-
+        gen = _diag_begin()
+        t_read = time.monotonic()
+        notify = {"n": 0, "bytes": 0}
         try:
-            if commands is None:
-                commands = [(CMD_DEVICE_INFO, 1.0), (CMD_CELL_INFO, 0.5)]
-            parser = FrameParser()
-            frames: Dict[int, bytes] = {}
+            t0 = time.monotonic()
+            dev = await BleakScanner.find_device_by_address(self.mac,
+                                                            timeout=self.find_timeout)
+            _diag_set(gen, find_ms=round((time.monotonic() - t0) * 1000, 1),
+                      found=bool(dev))
+            if not dev:
+                raise RuntimeError("device not found (asleep / out of range?)")
 
-            def handler(_sender, data: bytearray) -> None:
-                for frame in parser.feed(bytes(data)):
-                    frames[frame[4]] = frame
+            agent = None
+            if self.bond:
+                _diag_set(gen, phase="pair")
+                t0 = time.monotonic()
+                agent = BlueZPairingAgent(self.pin)
+                try:
+                    await agent.pair(self.mac)
+                    await asyncio.sleep(1)
+                    _diag_set(gen, pair_ms=round((time.monotonic() - t0) * 1000, 1))
+                except Exception:
+                    agent.close()
+                    raise
 
-            async with BleakClient(dev) as client:
-                log.info("connected to %s", self.mac)
-                await client.start_notify(CHR, handler)
-                for cmd, wait_s in commands:
-                    await client.write_gatt_char(CHR, build_command(cmd),
-                                                 response=False)
-                    await asyncio.sleep(wait_s)
+            try:
+                if commands is None:
+                    commands = [(CMD_DEVICE_INFO, 1.0), (CMD_CELL_INFO, 0.5)]
+                parser = FrameParser()
+                frames: Dict[int, bytes] = {}
+                _diag_set(gen, phase="connect",
+                          commands=[[c, w] for c, w in commands])
 
-                deadline = time.time() + timeout
-                grace_end: Optional[float] = None
-                while True:
-                    now = time.time()
-                    have_req = all(t in frames for t in required)
-                    have_all = all(t in frames for t in want_types)
-                    if have_req:
-                        if grace_end is None:
-                            grace_end = now + optional_wait
-                        if have_all or now >= grace_end:
+                def handler(_sender, data: bytearray) -> None:
+                    notify["n"] += 1
+                    notify["bytes"] += len(data)
+                    parsed = parser.feed(bytes(data))
+                    for frame in parsed:
+                        frames[frame[4]] = frame
+                    _diag_set(gen, notify_n=notify["n"],
+                              notify_bytes=notify["bytes"],
+                              frames_seen=sorted(frames))
+
+                t0 = time.monotonic()
+                async with BleakClient(dev) as client:
+                    _diag_set(gen,
+                              connect_ms=round((time.monotonic() - t0) * 1000, 1),
+                              phase="notify")
+                    log.info("connected to %s", self.mac)
+                    t0 = time.monotonic()
+                    await client.start_notify(CHR, handler)
+                    _diag_set(gen,
+                              notify_ms=round((time.monotonic() - t0) * 1000, 1))
+                    for i, (cmd, wait_s) in enumerate(commands):
+                        _diag_set(gen, phase=f"cmd_{i}_{cmd:#04x}")
+                        t0 = time.monotonic()
+                        await client.write_gatt_char(CHR, build_command(cmd),
+                                                     response=False)
+                        _diag_set(gen, write_ms=round((time.monotonic() - t0) * 1000, 1))
+                        await asyncio.sleep(wait_s)
+
+                    _diag_set(gen, phase="collect")
+                    t0 = time.monotonic()
+                    deadline = time.time() + timeout
+                    grace_end: Optional[float] = None
+                    while True:
+                        now = time.time()
+                        have_req = all(t in frames for t in required)
+                        have_all = all(t in frames for t in want_types)
+                        if have_req:
+                            if grace_end is None:
+                                grace_end = now + optional_wait
+                            if have_all or now >= grace_end:
+                                break
+                        if now >= deadline:
                             break
-                    if now >= deadline:
-                        break
-                    await asyncio.sleep(0.2)
-                await client.stop_notify(CHR)
-        finally:
-            if agent is not None:
-                agent.close()
+                        await asyncio.sleep(0.2)
+                    _diag_set(gen,
+                              collect_ms=round((time.monotonic() - t0) * 1000, 1))
+                    await client.stop_notify(CHR)
+                _diag_set(gen, phase="done")
+            finally:
+                if agent is not None:
+                    agent.close()
 
-        missing = [t for t in required if t not in frames]
-        if missing:
-            raise RuntimeError(f"no frame(s) {missing} within {timeout}s "
-                               f"(is the BMS bonded with PIN {self.pin}?)")
-        return frames
+            missing = [t for t in required if t not in frames]
+            if missing:
+                _diag_set(gen, phase="error",
+                          error=f"missing frames {missing}")
+                raise RuntimeError(f"no frame(s) {missing} within {timeout}s "
+                                   f"(is the BMS bonded with PIN {self.pin}?)")
+            _diag_set(gen, total_ms=round((time.monotonic() - t_read) * 1000, 1))
+            return frames
+        except Exception as e:
+            _diag_set(gen, phase="error", error=str(e),
+                      total_ms=round((time.monotonic() - t_read) * 1000, 1))
+            raise
 
     # -- high-level convenience API -------------------------------------
     async def read_live(self) -> JkReadings:

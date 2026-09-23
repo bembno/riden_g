@@ -75,10 +75,13 @@ bluetoothctl devices | grep C8:47:80:58:A3:A6
 ## Key Files
 | File | Location | Purpose |
 |------|----------|---------|
-| `bms_mqtt.py` | `/home/pi/Desktop/storage/` | BLE → MQTT bridge |
+| `bms_mqtt.py` | `/home/pi/Desktop/storage/` | BLE → MQTT bridge (24 h diag log + watchdog) |
+| `bms_watchdog.py` | `/home/pi/Desktop/storage/` | Watchdog thresholds/decision logic (unit-tested) |
+| `abms_log.txt` | `/home/pi/Desktop/storage/` | JSONL diagnostics: cycle/heartbeat/boot/reset records (24 h window, 8 MB cap) |
 | `bms_db_logger.py` | `/home/l3/Desktop/prog/measurement/` | MQTT → DB logger |
 | `BmsStorage.py` | `/home/l3/Desktop/prog/measurement/lib/` | DB storage class |
 | `protocol.py` | `/home/pi/Desktop/storage/bms_jk/jkbms/` | Frame parser (buffer bounded) |
+| `client.py` | `/home/pi/Desktop/storage/bms_jk/jkbms/` | BLE reader with LAST_DIAG phase timings |
 
 ## Environment Variables
 | Variable | Default | Description |
@@ -88,6 +91,9 @@ bluetoothctl devices | grep C8:47:80:58:A3:A6
 | `BMS_POLL_SECONDS` | 30 | Poll interval |
 | `BMS_BROKER` | 127.0.0.1 | MQTT broker |
 | `BMS_LOG_DIR` | ./logs | Log directory |
+| `BMS_DIAG_HOURS` | 24 | abms_log.txt diagnostics window (hours) |
+| `BMS_DIAG_MAXBYTES` | 8388608 | abms_log.txt size cap |
+| `BMS_WATCHDOG_STUCK_S` | 600 | Reset if no main-loop progress for this long (> worst legit gap ~305 s) |
 | `DB_HOST` | 192.168.2.33 | MariaDB host |
 | `DB_USER` | admin | MariaDB user |
 | `DB_PASSWORD` | aaa | MariaDB password |

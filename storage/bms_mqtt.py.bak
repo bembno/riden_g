@@ -14,16 +14,6 @@ the read failure is logged, an error payload is published so downstream
 consumers can see the outage, and retries back off progressively. The
 process never exits on a read error.
 
-Diagnostics / watchdog (24 h test run): every main-loop iteration appends
-a JSON line to abms_log.txt (cycle result, BLE read duration, backoff,
-failure counters, RSS, thread count, CPU time, BlueZ adapter state and
-the jkbms phase timings). A watchdog thread writes heartbeat records and,
-if the loop makes no progress for WATCHDOG_STUCK_S seconds (or spins
-tightly without ever completing a successful read), dumps thread stacks
-plus BlueZ state to abms_log.txt and restarts the process via os.execv.
-Normal operation and legitimate long backoffs (up to MAX_BACKOFF) never
-trigger a reset - see bms_watchdog.py for the threshold math.
-
 Environment overrides:
   BMS_MAC            BLE MAC of the JK BMS    (default C8:47:80:58:A3:A6)
   JK_PIN             bonding PIN              (default 1234)
@@ -32,13 +22,6 @@ Environment overrides:
   BMS_LOG_DIR        log directory            (default <script dir>/logs)
   BMS_LOG_MAXBYTES   rotate size in bytes     (default 1048576)
   BMS_LOG_BACKUPS    rotated files to keep    (default 2)
-  BMS_DIAG_FILE      diagnostics JSONL file   (default <script dir>/abms_log.txt)
-  BMS_DIAG_HOURS     diagnostics window       (default 24)
-  BMS_DIAG_MAXBYTES  diagnostics size cap     (default 8388608)
-  BMS_DIAG_UNTIL     absolute diag end (set automatically across execv)
-  BMS_WATCHDOG_STUCK_S  no-progress reset threshold (default 600)
-  BMS_WATCHDOG_CHECK_S  watchdog cadence           (default 30)
-  BMS_WATCHDOG_HB_S     heartbeat cadence          (default 120)
 """
 import json
 import logging
@@ -71,10 +54,7 @@ for _p in (os.path.join(_HERE, "bms_jk"), "/home/pi/Desktop/bms_jk"):
         break
 
 from jkbms import read_live  # noqa: E402  (path setup above)
-import jkbms.client as _jk_client  # noqa: E402  (LAST_DIAG phase timings)
-
-from bms_watchdog import (  # noqa: E402
-    LoopRateDetector, WatchdogConfig, check_progress, heartbeat_due)
+import jkbms.client as _jk_client  # noqa: E402  for LAST_DIAG access
 
 MAC = os.environ.get("BMS_MAC", "C8:47:80:58:A3:A6")
 PIN = os.environ.get("JK_PIN", "1234")
@@ -99,37 +79,25 @@ READ_HARD_TIMEOUT = 120.0
 # Consecutive hard timeouts before a full process restart
 RESTART_AFTER_HARD_TIMEOUTS = 2
 
-# --- diagnostics: JSON lines appended to DIAG_FILE for DIAG_HOURS ---
-DIAG_FILE = os.environ.get(
-    "BMS_DIAG_FILE", os.path.join(_HERE, "abms_log.txt"))
+# --- diagnostics / watchdog ---
+# Per-cycle parameters are appended as JSON lines to DIAG_FILE for up to
+# DIAG_HOURS hours, so a long stall can be post-analysed.
+DIAG_FILE = os.environ.get("BMS_DIAG_FILE", os.path.join(_HERE, "abms_log.txt"))
 DIAG_HOURS = float(os.environ.get("BMS_DIAG_HOURS", "24"))
-DIAG_MAX_BYTES = int(os.environ.get("BMS_DIAG_MAXBYTES", str(8 * 1024 * 1024)))
-# Absolute end of the diagnostics window. Preserved across os.execv
-# restarts via BMS_DIAG_UNTIL so a reset never silently extends the
-# 24 h test window.
-_DIAG_END = float(os.environ.get("BMS_DIAG_UNTIL") or 0.0) \
-    or (time.time() + DIAG_HOURS * 3600)
-_diag_capped_logged = False
-_diag_end_logged = False
+# If the main loop produces NO completed iteration for this many seconds,
+# the watchdog assumes a hard hang and restarts the process. This is
+# deliberately larger than the worst legitimate gap (~300s of backoff)
+# so a normal BMS outage never triggers a reset.
+WATCHDOG_STUCK_S = float(os.environ.get("BMS_WATCHDOG_STUCK_S", "600"))
+WATCHDOG_HB_S = float(os.environ.get("BMS_WATCHDOG_HB_S", "120"))  # heartbeat interval
+WATCHDOG_CHECK_S = float(os.environ.get("BMS_WATCHDOG_CHECK_S", "30"))  # check cadence
 
-# Watchdog thresholds. stuck_s must stay above WatchdogConfig.worst_legit_gap_s
-# (~305 s of error backoff or ~130 s of BLE read) so normal outages and
-# legitimate long-running reads never reset the bridge.
-WATCHDOG = WatchdogConfig(
-    stuck_s=float(os.environ.get("BMS_WATCHDOG_STUCK_S", "600")),
-    check_s=float(os.environ.get("BMS_WATCHDOG_CHECK_S", "30")),
-    hb_s=float(os.environ.get("BMS_WATCHDOG_HB_S", "120")),
-    poll_interval_s=POLL_INTERVAL,
-    read_hard_timeout_s=READ_HARD_TIMEOUT,
-    max_backoff_s=MAX_BACKOFF,
-    backoff_jitter_s=BACKOFF_JITTER,
-)
+_DIAG_END = time.time() + DIAG_HOURS * 3600
+_diag_done_logged = False
 
-# Shared between the main loop, the watchdog thread and the restart path.
+# Global state shared with the watchdog thread. `last_progress` is bumped
+# at the end of every main-loop iteration (success, error, or timeout).
 STATE = {
-    "pid": os.getpid(),
-    "started_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
-    "main_ident": 0,
     "cycles": 0,
     "failures": 0,
     "hard_timeouts": 0,
@@ -137,11 +105,9 @@ STATE = {
     "last_success": 0.0,
     "last_error": None,
     "last_backoff": 0.0,
-    "reset_attempts": 0,
 }
 
-_mqtt_client = None  # set in main(); used by _restart_process from watchdog
-_read_thread = None   # current/last BLE worker (single-flight guard)
+_mqtt_client: "mqtt.Client | None" = None
 
 # Prometheus metrics
 if PROMETHEUS_AVAILABLE:
@@ -306,35 +272,20 @@ def status_lines(p: dict, colored: bool = True):
 def read_live_with_timeout(mac, pin, timeout=READ_HARD_TIMEOUT):
     """Run a BLE read in a daemon thread with a hard deadline.
 
-    A raw daemon thread is used instead of ThreadPoolExecutor on purpose:
-    the executor's __exit__ calls shutdown(wait=True) and would block the
-    main thread forever when the worker is hung in an uninterruptible
-    BlueZ/DBus call - that exact hang was observed in production as a
-    bridge that stayed alive but went silent.  The daemon worker dies
-    with the process; os.execv on repeated hangs clears BlueZ state.
-
-    Only one worker is allowed at a time: if the previous attempt is
-    still hung when the next cycle starts, TimeoutError is raised
-    immediately instead of opening a second concurrent BLE connection
-    (and instead of leaking a new thread every cycle).
+    Uses a raw daemon thread instead of ThreadPoolExecutor: the executor's
+    __exit__ calls shutdown(wait=True) and would block the main thread
+    forever on a hung worker (this exact hang was observed in production).
+    The daemon thread is killed on process exit; os.execv on repeated
+    hangs clears the stuck BlueZ state.
     """
-    global _read_thread
-    if _read_thread is not None and _read_thread.is_alive():
-        _read_thread.join(1.0)
-        if _read_thread.is_alive():
-            raise TimeoutError(
-                "previous BLE read worker still hung (BlueZ/DBus leak)")
-
     box = {}
-
     def _worker():
         try:
             box["readings"] = read_live(mac, pin=pin)
-        except BaseException as e:  # noqa: BLE001 - propagate to joiner
+        except BaseException as e:
             box["error"] = e
 
     t = threading.Thread(target=_worker, name="bms-read", daemon=True)
-    _read_thread = t
     t.start()
     t.join(timeout)
     if t.is_alive():
@@ -345,43 +296,35 @@ def read_live_with_timeout(mac, pin, timeout=READ_HARD_TIMEOUT):
 
 
 # ---------------------------------------------------------------------------
-# Diagnostic file & watchdog helpers (shared between main() and watchdog)
+# Diagnostic file & watchdog helpers (shared between main() and test script)
 # ---------------------------------------------------------------------------
 
 def _bluez_state():
-    """Adapter state: power control sysfs + hciconfig (address/UP) + service."""
-    out = {"powered": None, "power_control": None, "hci_address": None,
-           "bluetooth_service": None}
+    """Fast BlueZ adapter state via /sys; lightweight subprocess for service."""
+    out = {}
+    for p, k in (
+        ("/sys/class/bluetooth/hci0/power", "powered"),
+        ("/sys/class/bluetooth/hci0/device/power/control", "power_control"),
+        ("/sys/class/bluetooth/hci0/address", "hci_address"),
+    ):
+        try:
+            with open(p) as f:
+                out[k] = f.read().strip()
+        except Exception:
+            out[k] = None
     try:
-        with open("/sys/class/bluetooth/hci0/device/power/control") as f:
-            out["power_control"] = f.read().strip()
-    except Exception:
-        pass
-    try:
-        r = subprocess.run(  # fast local ioctl; gives BD address + UP/RUNNING
-            ["hciconfig", "hci0"],
-            capture_output=True, text=True, timeout=5,
-        )
-        text = r.stdout or ""
-        out["powered"] = "UP RUNNING" in text
-        for line in text.splitlines():
-            if line.strip().startswith("BD Address:"):
-                out["hci_address"] = line.split(":", 1)[1].strip().split()[0]
-    except Exception:
-        pass
-    try:
-        r = subprocess.run(
+        r = subprocess.run(  # pylint: disable=subprocess-timed-out
             ["systemctl", "is-active", "bluetooth"],
             capture_output=True, text=True, timeout=5,
         )
         out["bluetooth_service"] = r.stdout.strip() or None
     except Exception:
-        pass
+        out["bluetooth_service"] = None
     return out
 
 
 def _rss_kb():
-    """Resident set size in kB from /proc/self/status (Linux)."""
+    """Read RSS (Resident Set Size) in kB from /proc/self/status."""
     try:
         with open("/proc/self/status") as f:
             for line in f:
@@ -392,84 +335,26 @@ def _rss_kb():
     return None
 
 
-def _cpu_s():
-    """Cumulative process CPU time in seconds from /proc/self/stat."""
-    try:
-        with open("/proc/self/stat") as f:
-            parts = f.read().split()
-        ticks = int(parts[13]) + int(parts[14])  # utime + stime
-        return round(ticks / os.sysconf("SC_CLK_TCK"), 1)
-    except Exception:
-        return None
-
-
 def _thread_stacks():
-    """Compact stack summaries of all live threads.
-
-    Identifies the main-loop thread via STATE['main_ident'] so a stuck
-    main thread (and the BlueZ call it is blocked in) is obvious in the
-    dump written before a reset.
-    """
-    ident2name = {t.ident: t.name for t in threading.enumerate()}
-    main_ident = STATE["main_ident"]
+    """Capture stacks of all threads via sys._current_frames()."""
+    main_id = threading.get_ident()
     stacks = {}
     for tid, frame in sys._current_frames().items():
+        # Build a compact summary: filename:line in function
+        frames = []
+        for line in traceback.format_stack(frame):
+            frames.append(line.strip())
         stacks[str(tid)] = {
-            "name": ident2name.get(tid, "?"),
-            "main_loop": tid == main_ident,
-            "frames": [ln.strip() for ln in
-                       traceback.format_stack(frame, limit=12)],
+            "name": threading.Thread(name=tid).name if tid in [t.ident for t in threading.enumerate()] else "?",
+            "main": tid == main_id,
+            "frames": frames,
         }
     return stacks
 
 
-def _diag_snapshot():
-    """Everything the watchdog wants in a heartbeat / reset record."""
-    now = time.time()
-    try:
-        jk = dict(_jk_client.LAST_DIAG)
-    except Exception:
-        jk = {}
-    return {
-        "cycles": STATE["cycles"],
-        "failures": STATE["failures"],
-        "hard_timeouts": STATE["hard_timeouts"],
-        "progress_age_s": round(now - STATE["last_progress"], 1),
-        "success_age_s": (round(now - STATE["last_success"], 1)
-                          if STATE["last_success"] else None),
-        "last_error": STATE["last_error"],
-        "last_backoff_s": STATE["last_backoff"],
-        "reset_attempts": STATE["reset_attempts"],
-        "rss_kb": _rss_kb(),
-        "cpu_s": _cpu_s(),
-        "threads": threading.active_count(),
-        "jkbms": jk,
-        "bluez": _bluez_state(),
-    }
-
-
 def _diag_write(rec):
-    """Append one JSON line to the diagnostics file while the window is open.
-
-    The file is hard-capped at DIAG_MAX_BYTES so a runaway process can
-    never fill the Pi's disk; the cap and the window expiry are logged
-    once each.
-    """
-    global _diag_capped_logged, _diag_end_logged
-    now = time.time()
-    if now >= _DIAG_END:
-        if not _diag_end_logged:
-            _diag_end_logged = True
-            logging.getLogger("bms").info(
-                f"diagnostics window closed ({DIAG_HOURS:g} h); "
-                f"no more records in {DIAG_FILE}")
-        return
-    if os.path.exists(DIAG_FILE) and os.path.getsize(DIAG_FILE) >= DIAG_MAX_BYTES:
-        if not _diag_capped_logged:
-            _diag_capped_logged = True
-            logging.getLogger("bms").warning(
-                f"diagnostics file {DIAG_FILE} reached {DIAG_MAX_BYTES} B cap; "
-                f"no more records")
+    """Append a JSON line to the diagnostics file if the 24‑hour window is open."""
+    if time.time() >= _DIAG_END:
         return
     try:
         with open(DIAG_FILE, "a", encoding="utf-8") as f:
@@ -479,7 +364,7 @@ def _diag_write(rec):
 
 
 def _write_cycle_diag(seq, result, err, read_ms, backoff, payload=None):
-    """One JSON-line record per main-loop iteration - the core of the 24 h test."""
+    """Append one JSON-line diagnostic record for a main-loop iteration."""
     rec = {
         "type": "cycle",
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
@@ -487,14 +372,9 @@ def _write_cycle_diag(seq, result, err, read_ms, backoff, payload=None):
         "result": result,
         "read_ms": round(read_ms, 1) if read_ms is not None else None,
         "backoff_s": round(backoff, 1),
-        "state": {
-            "failures": STATE["failures"],
-            "hard_timeouts": STATE["hard_timeouts"],
-            "last_error": STATE["last_error"],
-        },
+        "state": {"failures": STATE["failures"], "hard_timeouts": STATE["hard_timeouts"]},
         "sys": {
             "rss_kb": _rss_kb(),
-            "cpu_s": _cpu_s(),
             "threads": threading.active_count(),
         },
         "bluez": _bluez_state(),
@@ -507,6 +387,7 @@ def _write_cycle_diag(seq, result, err, read_ms, backoff, payload=None):
             "i": payload.get("current_A"),
             "soc": payload.get("soc"),
         }
+    # merge last jkbms diag if available
     try:
         rec["diag"] = dict(_jk_client.LAST_DIAG)
     except Exception:
@@ -515,40 +396,15 @@ def _write_cycle_diag(seq, result, err, read_ms, backoff, payload=None):
 
 
 def _mark_progress():
-    """Tell the watchdog the main loop completed a step this iteration."""
+    """Tell the watchdog that the main loop made progress this iteration."""
     STATE["last_progress"] = time.time()
 
 
 def _restart_process(reason: str):
-    """Dump diagnostics to abms_log.txt, then restart via os.execv.
-
-    Always logs + writes the reset record BEFORE restarting so the cause
-    can be post-analysed.  execv keeps the same screen session ('bms')
-    and log files.  If execv somehow returns/fails, progress is bumped so
-    the watchdog retries after another stuck window instead of spinning.
-    """
-    global _mqtt_client, STATE
+    """Restart the bms_mqtt process via os.execv (preserves the screen session)."""
+    global _mqtt_client
     STATE["last_error"] = reason
-    log = logging.getLogger("bms")
-    log.error(f"RESTARTING bms_mqtt process ({reason})")
-
-    rec = {
-        "type": "reset",
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
-        "reason": reason,
-        "pid": STATE["pid"],
-        "started_at": STATE["started_at"],
-        "sys": {
-            "rss_kb": _rss_kb(),
-            "cpu_s": _cpu_s(),
-            "threads": threading.active_count(),
-        },
-        "bluez": _bluez_state(),
-        "stacks": _thread_stacks(),
-    }
-    rec.update(_diag_snapshot())
-    _diag_write(rec)
-
+    logging.getLogger("bms").error(f"RESTARTING bms_mqtt process ({reason})")
     try:
         if _mqtt_client is not None:
             _mqtt_client.publish(TOPIC_ONLINE, "0", retain=True)
@@ -557,58 +413,15 @@ def _restart_process(reason: str):
     except Exception:
         pass
     time.sleep(1)
-
-    env = dict(os.environ)
-    env["BMS_DIAG_UNTIL"] = str(int(_DIAG_END))
-    try:
-        os.execve(sys.executable, [sys.executable, "-u"] + sys.argv, env)
-    except Exception as e:
-        STATE["reset_attempts"] += 1
-        STATE["last_progress"] = time.time()  # retry after another window
-        log.error(f"os.execv failed ({e}); continuing with reset_attempts="
-                  f"{STATE['reset_attempts']}")
+    # execv replaces the whole process; on return (extremely unlikely) fall through
+    os.execv(sys.executable, [sys.executable, "-u"] + sys.argv)
 
 
-def _watchdog():
-    """Background thread: heartbeat records + stuck / tight-loop detection.
-
-    Only fires when the loop has genuinely made no progress for
-    WATCHDOG_STUCK_S (> worst legitimate gap, see bms_watchdog.WatchdogConfig)
-    or when it spins several times faster than POLL_INTERVAL allows without
-    a single successful read - so normal operation and legitimate long
-    reads/backoffs never reset the bridge.
-    """
-    detector = LoopRateDetector(WATCHDOG)
-    last_hb = time.time()
-    while not _shutdown:
-        time.sleep(max(5.0, WATCHDOG.check_s))
-        if _shutdown:
-            break
-        now = time.time()
-
-        if heartbeat_due(last_hb, now, WATCHDOG):
-            last_hb = now
-            _diag_write({
-                "type": "heartbeat",
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
-                **_diag_snapshot(),
-            })
-
-        reason = check_progress(STATE["last_progress"], now, WATCHDOG)
-        if reason is None:
-            reason = detector.observe(STATE["cycles"], STATE["last_success"],
-                                      now)
-        if reason is not None:
-            logging.getLogger("bms").error(f"WATCHDOG: {reason} -- "
-                                           f"dumping diagnostics")
-            _restart_process(reason)
+def _watchdog_stopped = False
 
 
 def main():
-    global _mqtt_client
     log = setup_logging()
-    _mqtt_client = None  # set below; watchdog restart path reads this global
-    STATE["main_ident"] = threading.get_ident()
 
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
@@ -620,44 +433,9 @@ def main():
     client.connect(BROKER, PORT, 60)
     client.loop_start()
     client.publish(TOPIC_ONLINE, "1", retain=True)
-    _mqtt_client = client
     log.info(f"bms_mqtt: polling {MAC} every {POLL_INTERVAL:.0f}s -> "
              f"{BROKER}:{PORT}{TOPIC_STATUS} | log={LOG_FILE} "
              f"(max {LOG_MAX_BYTES}B x {LOG_BACKUPS + 1})")
-    log.info(f"diagnostics: {DIAG_FILE} for {DIAG_HOURS:g} h "
-             f"(cap {DIAG_MAX_BYTES} B, until "
-             f"{time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(_DIAG_END))}) "
-             f"| watchdog: stuck>{WATCHDOG.stuck_s:.0f}s, "
-             f"check {WATCHDOG.check_s:.0f}s, hb {WATCHDOG.hb_s:.0f}s "
-             f"(worst legit gap {WATCHDOG.worst_legit_gap_s:.0f}s)")
-
-    # First record of the 24 h window: config + environment (no secrets).
-    _diag_write({
-        "type": "boot",
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
-        "pid": STATE["pid"],
-        "diag_until": time.strftime("%Y-%m-%dT%H:%M:%S",
-                                    time.localtime(_DIAG_END)),
-        "config": {
-            "mac": MAC,
-            "poll_interval_s": POLL_INTERVAL,
-            "read_hard_timeout_s": READ_HARD_TIMEOUT,
-            "max_backoff_s": MAX_BACKOFF,
-            "restart_after_hard_timeouts": RESTART_AFTER_HARD_TIMEOUTS,
-            "watchdog_stuck_s": WATCHDOG.stuck_s,
-            "watchdog_check_s": WATCHDOG.check_s,
-            "watchdog_hb_s": WATCHDOG.hb_s,
-            "worst_legit_gap_s": WATCHDOG.worst_legit_gap_s,
-            "diag_max_bytes": DIAG_MAX_BYTES,
-        },
-        "sys": {"rss_kb": _rss_kb(), "cpu_s": _cpu_s(),
-                "threads": threading.active_count()},
-        "bluez": _bluez_state(),
-    })
-
-    # Watchdog: heartbeats + stuck / tight-loop detection (see _watchdog).
-    threading.Thread(target=_watchdog, daemon=True,
-                     name="bms-watchdog").start()
 
     # Start Prometheus metrics HTTP server
     if PROMETHEUS_AVAILABLE:
@@ -686,14 +464,9 @@ def main():
     hard_timeouts = 0
     while not _shutdown:
         start = time.monotonic()
-        STATE["cycles"] += 1
-        seq = STATE["cycles"]
-        result, err, read_ms, backoff = "ok", None, None, 0.0
-        _mark_progress()
         try:
             read_start = time.monotonic()
             readings = read_live_with_timeout(MAC, pin=PIN)
-            read_ms = (time.monotonic() - read_start) * 1000.0
             if readings.cell is None:
                 raise RuntimeError("no cell frame in readings")
 
@@ -708,7 +481,7 @@ def main():
 
             if PROMETHEUS_AVAILABLE:
                 BLE_READS_TOTAL.labels(result='success').inc()
-                BLE_READ_DURATION.observe(read_ms / 1000.0)
+                BLE_READ_DURATION.observe(time.monotonic() - read_start)
                 cell = readings.cell
                 BMS_VOLTAGE.set(cell.battery_voltage_V)
                 BMS_CURRENT.set(cell.current_A)
@@ -721,51 +494,30 @@ def main():
                 BMS_ERRORS.set(len(cell.errors or []))
 
             failures = 0
-            hard_timeouts = 0
-            STATE["failures"] = 0
-            STATE["hard_timeouts"] = 0
-            STATE["last_success"] = time.time()
-            STATE["last_error"] = None
-            _mark_progress()
-            _write_cycle_diag(seq, result, err, read_ms, backoff, payload)
-
-            delay = max(0.0, POLL_INTERVAL - (time.monotonic() - start))
-            time.sleep(delay)
-            _mark_progress()
-            continue
-
         except TimeoutError as te:
-            result, err = "timeout", str(te)
-            if read_ms is None:
-                read_ms = (time.monotonic() - read_start) * 1000.0
             if PROMETHEUS_AVAILABLE:
                 BLE_READS_TOTAL.labels(result='timeout').inc()
             # bleak hung on a DBus call - retrying in-process often stays
             # stuck; restart the whole process after N consecutive hangs
-            # (_restart_process uses os.execv: same screen session/logs).
+            # (os.execv keeps the same screen session and logs).
             hard_timeouts += 1
-            STATE["hard_timeouts"] = hard_timeouts
-            STATE["last_error"] = err
             log.error(f"BLE HARD TIMEOUT ({hard_timeouts}/"
                       f"{RESTART_AFTER_HARD_TIMEOUTS}): {te}")
-            _mark_progress()
-            _write_cycle_diag(seq, result, err, read_ms, backoff)
             if hard_timeouts >= RESTART_AFTER_HARD_TIMEOUTS:
-                _restart_process(
-                    f"hard timeout x{hard_timeouts}: {te}")
+                log.error("RESTARTING bms_mqtt process to clear BlueZ state")
+                try:
+                    client.publish(TOPIC_ONLINE, "0", retain=True)
+                    client.loop_stop()
+                    client.disconnect()
+                except Exception:
+                    pass
+                time.sleep(1)
+                os.execv(sys.executable, [sys.executable, "-u"] + sys.argv)
             time.sleep(POLL_INTERVAL)
-            _mark_progress()
             continue
-
         except Exception as e:
-            result, err = "error", str(e)
-            if read_ms is None:
-                read_ms = (time.monotonic() - read_start) * 1000.0
             failures += 1
-            STATE["failures"] = failures
-            STATE["last_error"] = err
             backoff = min(POLL_INTERVAL * (1 + failures) + random.uniform(0, BACKOFF_JITTER), MAX_BACKOFF)
-            STATE["last_backoff"] = backoff
             if PROMETHEUS_AVAILABLE:
                 BLE_READS_TOTAL.labels(result='error').inc()
                 BLE_BACKOFF_SECONDS.set(backoff)
@@ -781,11 +533,11 @@ def main():
                     MQTT_PUBLISH_TOTAL.labels(topic=TOPIC_STATUS, result='error').inc()
             except Exception as pe:
                 log.error(f"publish of error payload failed: {pe}")
-            _mark_progress()
-            _write_cycle_diag(seq, result, err, read_ms, backoff)
             time.sleep(backoff)
-            _mark_progress()
             continue
+
+        delay = max(0.0, POLL_INTERVAL - (time.monotonic() - start))
+        time.sleep(delay)
 
     log.info("Shutdown signal received, cleaning up...")
     client.publish(TOPIC_ONLINE, "0", retain=True)
