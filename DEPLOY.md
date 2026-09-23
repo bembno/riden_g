@@ -1,17 +1,21 @@
 # BMS System Deployment Guide
 
 ## Architecture
-- **pi407 (storage)**: 192.168.2.42 - Runs `bms_mqtt.py` (BLE → MQTT bridge)
-- **pi406 (measurement)**: 192.168.2.33 - Runs `bms_db_logger.py` (MQTT → MariaDB)
+- **pi407 (storage)**: 192.168.2.42 - Runs `bms_mqtt.py` (BLE → MQTT bridge) + mosquitto broker
+- **pi406 (measurement)**: 192.168.2.35 (user `pi`, pass `raspberry`) - Runs `smainbat.py` + `bms_db_logger.py`
+- **l3PC (MariaDB host)**: 192.168.2.33 (user `l3`, pass `aaa`) - MariaDB only, no measurement processes
 - **MQTT Broker**: 192.168.2.42:1883 (on pi407)
-- **MariaDB**: 192.168.2.33:3306 (on pi406)
+- **MariaDB**: 192.168.2.33:3306 (on l3PC laptop)
 
 ## SSH Access
 ```bash
 # pi407 (storage) - key auth
 ssh -i ~/.ssh/id_ed25519_pi407 pi@192.168.2.42
 
-# pi406 (measurement) - password auth (user: l3, pass: aaa)
+# pi406 (measurement) - password auth (user: pi, pass: raspberry)
+sshpass -p 'raspberry' ssh pi@192.168.2.35
+
+# l3PC (MariaDB only)
 sshpass -p 'aaa' ssh l3@192.168.2.33
 ```
 
@@ -34,10 +38,10 @@ screen -S bms -X quit                    # Stop
 cd /home/pi/Desktop/storage && screen -S bms -dm bash -c 'exec python3 -u bms_mqtt.py'  # Start
 tail -f /home/pi/Desktop/storage/logs/bms_mqtt.log  # Logs
 
-# On pi406 (logger)
-pkill -f bms_db_logger.py                # Stop
-nohup python3 -u /home/l3/Desktop/prog/measurement/bms_db_logger.py > /home/l3/bms_db.log 2>&1 &  # Start
-tail -f /home/l3/Desktop/prog/measurement/logs/bms_db.log  # Logs
+# On pi406 (logger + control loop)
+screen -S bms -X quit                      # Stop logger
+cd /home/pi/Desktop/prog/measurement && screen -S bms -dm bash -c 'exec python3 -u bms_db_logger.py'  # Start
+tail -f /home/pi/Desktop/prog/measurement/logs/bms_db.log  # Logs
 ```
 
 ## Bluetooth Fix (Critical)
@@ -78,8 +82,8 @@ bluetoothctl devices | grep C8:47:80:58:A3:A6
 | `bms_mqtt.py` | `/home/pi/Desktop/storage/` | BLE → MQTT bridge (24 h diag log + watchdog) |
 | `bms_watchdog.py` | `/home/pi/Desktop/storage/` | Watchdog thresholds/decision logic (unit-tested) |
 | `abms_log.txt` | `/home/pi/Desktop/storage/` | JSONL diagnostics: cycle/heartbeat/boot/reset records (24 h window, 8 MB cap) |
-| `bms_db_logger.py` | `/home/l3/Desktop/prog/measurement/` | MQTT → DB logger |
-| `BmsStorage.py` | `/home/l3/Desktop/prog/measurement/lib/` | DB storage class |
+| `bms_db_logger.py` | `/home/pi/Desktop/prog/measurement/` | MQTT → DB logger |
+| `BmsStorage.py` | `/home/pi/Desktop/prog/measurement/lib/` | DB storage class |
 | `protocol.py` | `/home/pi/Desktop/storage/bms_jk/jkbms/` | Frame parser (buffer bounded) |
 | `client.py` | `/home/pi/Desktop/storage/bms_jk/jkbms/` | BLE reader with LAST_DIAG phase timings |
 
@@ -89,7 +93,7 @@ bluetoothctl devices | grep C8:47:80:58:A3:A6
 | `BMS_MAC` | C8:47:80:58:A3:A6 | BMS BLE MAC |
 | `JK_PIN` | 1234 | Bonding PIN |
 | `BMS_POLL_SECONDS` | 30 | Poll interval |
-| `BMS_BROKER` | 127.0.0.1 | MQTT broker |
+| `BMS_BROKER` | 192.168.2.42 | MQTT broker (pi407) |
 | `BMS_LOG_DIR` | ./logs | Log directory |
 | `BMS_DIAG_HOURS` | 24 | abms_log.txt diagnostics window (hours) |
 | `BMS_DIAG_MAXBYTES` | 8388608 | abms_log.txt size cap |

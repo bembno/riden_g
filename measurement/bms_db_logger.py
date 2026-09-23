@@ -199,7 +199,23 @@ def main():
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
     client.on_message = on_message
-    client.connect(BROKER, PORT, 60)
+
+    # Broker may not be up yet at boot (pi407 starts after us). Retry
+    # instead of crashing — an unguarded connect() raised ConnectionRefused
+    # and killed the process before the banner was ever logged.
+    _delay = 1
+    while not _shutdown:
+        try:
+            client.connect(BROKER, PORT, 60)
+            break
+        except OSError as exc:
+            log.warning(f"MQTT broker {BROKER}:{PORT} not reachable ({exc}); retrying in {_delay}s...")
+            time.sleep(_delay)
+            _delay = min(_delay * 2, 30)
+    else:
+        log.info("Shutdown requested before MQTT broker became reachable")
+        return
+
     log.info(f"bms_db_logger: {BROKER}:{PORT}{TOPIC_STATUS} -> "
              f"{DB['database']}.bms_jk | log={LOG_FILE} "
              f"(max {LOG_MAX_BYTES}B x {LOG_BACKUPS + 1})")

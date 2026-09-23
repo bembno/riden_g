@@ -5,9 +5,9 @@ BRIDGE_HOST="192.168.2.42"
 BRIDGE_USER="pi"
 BRIDGE_KEY="~/.ssh/id_ed25519_pi407"
 
-LOGGER_HOST="192.168.2.33"
-LOGGER_USER="l3"
-LOGGER_PASS="aaa"
+LOGGER_HOST="192.168.2.35"
+LOGGER_USER="pi"
+LOGGER_PASS="raspberry"
 
 echo "=== Bridge (pi407) ==="
 ssh -i "$BRIDGE_KEY" "$BRIDGE_USER@$BRIDGE_HOST" "
@@ -34,7 +34,7 @@ sshpass -p "$LOGGER_PASS" ssh -o StrictHostKeyChecking=no "$LOGGER_USER@$LOGGER_
     mysql -h 192.168.2.33 -u admin -paaa energy -e \"SELECT MAX(created_at) FROM bms_jk\" 2>/dev/null || echo 'DB query failed'
     echo ''
     echo 'Recent logs:'
-    tail -3 /home/l3/Desktop/prog/measurement/logs/bms_db.log 2>/dev/null || tail -3 /home/l3/bms_db.log 2>/dev/null || echo 'No log file'
+    tail -3 /home/pi/Desktop/prog/measurement/logs/bms_db.log 2>/dev/null || echo 'No log file'
 "
 
 echo ""

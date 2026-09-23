@@ -80,8 +80,8 @@ def test_logger_process():
     print("Testing logger process...")
     try:
         result = subprocess.run(
-            ['sshpass', '-p', 'aaa', 'ssh', '-o', 'StrictHostKeyChecking=no', 'l3@192.168.2.33', 
-             'ps aux | grep bms_db_logger | grep -v grep'],
+            ['sshpass', '-p', 'raspberry', 'ssh', '-o', 'StrictHostKeyChecking=no', 'pi@192.168.2.35', 
+             'pgrep -af bms_db_logger.py'],
             capture_output=True, text=True, timeout=10
         )
         if 'bms_db_logger.py' in result.stdout:

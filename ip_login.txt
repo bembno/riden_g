@@ -1,10 +1,12 @@
 access to local networks machines where code is inplemented:
 
+# pi406 (measurement Pi): 192.168.2.35
 /home/pi/Desktop/prog/measurement
-pi@pi406 pasword: raspberry
+pi@pi406 (192.168.2.35) password: raspberry
 
-
+# pi407 (storage Pi): 192.168.2.42
 /home/pi/Desktop/storage
-pi@pi407 pasword: raspberry
+pi@pi407 (192.168.2.42) password: raspberry
 
-ssh to l3@192.168.2.33 pasword aaa
+# l3PC laptop (MariaDB only, no BMS processes): 192.168.2.33
+ssh to l3@192.168.2.33 password aaa

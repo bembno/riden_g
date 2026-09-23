@@ -17,7 +17,7 @@ PID loop drives the smart-meter import/export toward zero.
 
 MQTT broker: mosquitto on pi407 (192.168.2.42), topics
 `devices/command` / `devices/response` / `bms_jk/status` / `bms_jk/online`.
-MariaDB: 192.168.2.33, database `energy` (tables p1_data, t_logs, bms_jk).
+MariaDB: 192.168.2.33 (l3PC laptop, not a Pi), database `energy` (tables p1_data, t_logs, bms_jk).
 
 ## Safety layers (outermost first)
 

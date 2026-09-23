@@ -9,10 +9,10 @@ BRIDGE_USER="pi"
 BRIDGE_KEY="~/.ssh/id_ed25519_pi407"
 BRIDGE_PATH="/home/pi/Desktop/storage"
 
-LOGGER_HOST="192.168.2.33"
-LOGGER_USER="l3"
-LOGGER_PASS="aaa"
-LOGGER_PATH="/home/l3/Desktop/prog/measurement"
+LOGGER_HOST="192.168.2.35"
+LOGGER_USER="pi"
+LOGGER_PASS="raspberry"
+LOGGER_PATH="/home/pi/Desktop/prog/measurement"
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 
@@ -57,15 +57,16 @@ deploy_logger() {
         touch $LOGGER_PATH/lib/__init__.py
     "
     
-    # Restart logger service
+    # Restart logger service (screen, same as boot script)
     sshpass -p "$LOGGER_PASS" ssh -o StrictHostKeyChecking=no "$LOGGER_USER@$LOGGER_HOST" "
-        pkill -f bms_db_logger.py 2>/dev/null || true
+        screen -S bms -X quit 2>/dev/null || true
         sleep 2
         mkdir -p $LOGGER_PATH/logs
-        nohup python3 -u $LOGGER_PATH/bms_db_logger.py > /home/l3/bms_db.log 2>&1 &
-        sleep 2
+        screen -S bms -dm bash -c 'cd $LOGGER_PATH && exec python3 -u bms_db_logger.py'
+        sleep 3
         echo 'Logger restarted. Status:'
-        ps aux | grep bms_db_logger | grep -v grep
+        screen -ls
+        pgrep -af bms_db_logger.py || true
     "
     
     echo "Logger deployed and restarted"
