@@ -4,6 +4,7 @@ import threading
 import paho.mqtt.client as mqtt
 import os
 import subprocess
+from queue import Queue
 
 from drivers.riden import Riden
 from drivers.InverterController import InverterController
@@ -42,6 +43,10 @@ class DeviceServer:
         self._no_charger_warned = False  # Watchdog dedupe flag for inverter-only mode
         self._watchdog_silence_start = None  # When continuous silence began
         self._safety_off_done = False  # Safety shutdown already applied this silence period
+
+        # Command queue + worker thread: keeps MQTT network thread free
+        self._cmd_queue = Queue()
+        self._cmd_worker = threading.Thread(target=self._process_commands, daemon=True)
 
     # ------------------------------------------------------------
     # CONNECTION HELPERS
@@ -482,18 +487,27 @@ class DeviceServer:
             client.publish(TOPIC_RESP, json.dumps(error_out))
             return
 
-        try:
-            self.last_client_msg = time.time()  # Update watchdog timestamp
-            print("CMD:", payload)
-            out = self.handle_command(payload)
-            if request_id is not None:
-                out["request_id"] = request_id
-            client.publish(TOPIC_RESP, json.dumps(out))
-        except Exception as e:
-            error_out = {"status": "error", "message": str(e)}
-            if request_id is not None:
-                error_out["request_id"] = request_id
-            client.publish(TOPIC_RESP, json.dumps(error_out))
+        # Enqueue for worker thread - keeps MQTT network thread free for keepalive
+        self._cmd_queue.put((client, request_id, payload))
+
+    def _process_commands(self):
+        """Worker thread: processes commands off the MQTT network thread."""
+        while True:
+            client, request_id, payload = self._cmd_queue.get()
+            try:
+                self.last_client_msg = time.time()  # Update watchdog timestamp
+                print("CMD:", payload)
+                out = self.handle_command(payload)
+                if request_id is not None:
+                    out["request_id"] = request_id
+                client.publish(TOPIC_RESP, json.dumps(out))
+            except Exception as e:
+                error_out = {"status": "error", "message": str(e)}
+                if request_id is not None:
+                    error_out["request_id"] = request_id
+                client.publish(TOPIC_RESP, json.dumps(error_out))
+            finally:
+                self._cmd_queue.task_done()
 
     # ------------------------------------------------------------
     # MAIN START
@@ -503,6 +517,9 @@ class DeviceServer:
         self.connect_charger()
         self.connect_inverter()
         self.connect_pindriver()
+
+        # Start command worker thread (processes commands off MQTT thread)
+        self._cmd_worker.start()
 
         # Start device monitor
         threading.Thread(target=self.monitor_devices, daemon=True).start()

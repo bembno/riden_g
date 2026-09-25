@@ -60,7 +60,7 @@ class P1Storage:
         self.connection_failed_logged = False  # Track if error was logged
         self._connect()
     
-def _connect(self):
+    def _connect(self):
         """Establish connection to MySQL server."""
         try:
             self.connection = mysql.connector.connect(
