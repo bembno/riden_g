@@ -52,6 +52,10 @@ deploy_logger() {
     sshpass -p "$LOGGER_PASS" scp -o StrictHostKeyChecking=no \
         "$REPO_ROOT/measurement/lib/BmsStorage.py" "$LOGGER_USER@$LOGGER_HOST:$LOGGER_PATH/lib/BmsStorage.py"
     
+    # Copy P1Storage (for smainbat.py)
+    sshpass -p "$LOGGER_PASS" scp -o StrictHostKeyChecking=no \
+        "$REPO_ROOT/measurement/lib/P1Storage.py" "$LOGGER_USER@$LOGGER_HOST:$LOGGER_PATH/lib/P1Storage.py"
+    
     # Ensure __init__.py exists
     sshpass -p "$LOGGER_PASS" ssh -o StrictHostKeyChecking=no "$LOGGER_USER@$LOGGER_HOST" "
         touch $LOGGER_PATH/lib/__init__.py

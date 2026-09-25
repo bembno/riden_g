@@ -35,9 +35,10 @@ MariaDB: 192.168.2.33 (l3PC laptop, not a Pi), database `energy` (tables p1_data
 
 ## Notes
 
-- **Timezones:** the Pis run local time (CEST); the database `created_at`
-  and `bms_timestamp` are UTC. Add +2 h (summer) to DB times when
-  cross-referencing Pi console logs.
+- **Timezones:** all database timestamps are UTC. The MySQL session
+  timezone is set to UTC on connection (`SET time_zone = '+00:00'`).
+  Pi console logs run local time (CEST); add +2 h (summer) when
+  cross-referencing console logs with DB times.
 - **Relay:** GPIO17, active-HIGH wiring. State persists in
   `storage/.pin_state` and is re-applied when the server restarts.
 - **BMS:** JK-B2A24S15P over BLE (`C8:47:80:58:A3:A6`, PIN 1234); the

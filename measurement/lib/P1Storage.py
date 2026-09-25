@@ -60,7 +60,7 @@ class P1Storage:
         self.connection_failed_logged = False  # Track if error was logged
         self._connect()
     
-    def _connect(self):
+def _connect(self):
         """Establish connection to MySQL server."""
         try:
             self.connection = mysql.connector.connect(
@@ -69,10 +69,11 @@ class P1Storage:
                 password=self.password,
                 database=self.database,
                 autocommit=True,
-                connection_timeout=1,  # 1 second timeout for initial connection
+                connection_timeout=1,
                 auth_plugin='mysql_native_password'
             )
             self.cursor = self.connection.cursor()
+            self.cursor.execute("SET time_zone = '+00:00'")
             return True
         except Exception as e:
             print(f"Failed to connect to MySQL: {e}")

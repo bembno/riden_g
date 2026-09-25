@@ -63,6 +63,7 @@ class BmsStorage:
                 auth_plugin='mysql_native_password'
             )
             self.cursor = self.connection.cursor()
+            self.cursor.execute("SET time_zone = '+00:00'")
             return True
         except Exception as e:
             print(f"Failed to connect to MySQL: {e}")
