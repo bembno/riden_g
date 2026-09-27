@@ -195,9 +195,13 @@ class BatteryGuard:
             full = v >= VBAT_CEIL
             recover_full = v <= VBAT_CEIL_RECOVER
 
-        # --- 3. no visibility: keep the latched state ---
+        # --- 3. no visibility: default to NORMAL (safe default) ---
+        # If we can't see the battery, don't keep a stale block_discharge latch
+        # from a previous low-battery event. Default to normal operation.
         else:
             with self._lock:
+                if self._latched_mode == MODE_BLOCK_DISCHARGE:
+                    return MODE_NORMAL
                 return self._latched_mode
 
         # --- latched state machine (true hysteresis, single-pass) ---
