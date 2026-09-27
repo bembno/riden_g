@@ -469,6 +469,16 @@ class SMainBat:
                 except Exception as e:
                     print(f"{YELLOW}Warning: Failed to set inverter power to 0: {e}{RESET}")
                 
+                # Anti-windup: reset PID integral if charger explicitly unavailable
+                # (prevents massive charge demand when relay reconnects)
+                # riden_pin_state: None=pending, True=connected, False=disconnected
+                charger_ready = self.riden.available and (riden_pin_state is True)
+                if not charger_ready and riden_pin_state is not None:
+                    if self.pid.integral != 0.0:
+                        print(f"{YELLOW}PID integral reset: charger unavailable (riden={self.riden.available}, pin={riden_pin_state}){RESET}")
+                    self.pid.integral = 0.0
+                    self.pid.last_output = 0.0
+                
                 if self.riden.available:
                     try:
                         if not self.riden.output:
