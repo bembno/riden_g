@@ -60,9 +60,13 @@ class PIDController:
         # --- Integral ---
         
         # Only integrate if NOT saturating in same direction
+        # Actively unwind integral when error opposes saturation
         if not ((self.last_output >= max_output and error > 0) or
                 (self.last_output <= min_output and error < 0)):
             self.integral += error * dt
+        elif (self.last_output <= min_output and error > 0) or \
+             (self.last_output >= max_output and error < 0):
+            self.integral += error * dt * 2.0
 
         # --- Derivative (on measurement, prevents kick) ---
         if self.last_measured is None:

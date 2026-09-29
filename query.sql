@@ -1,0 +1,1 @@
+SELECT bms_timestamp, battery_voltage_V, current_A, power_W, soc FROM bms_jk WHERE bms_timestamp LIKE '2026-09-28%' ORDER BY bms_timestamp DESC LIMIT 50;
