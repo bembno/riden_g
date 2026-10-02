@@ -402,7 +402,8 @@ class SMainBat:
 
             # Feed the guard's Riden fallback with the live pack voltage
             # (v_out is battery-side when the relay is connected)
-            self.guard.set_riden_vbat(self.v_out if self.riden.available else None)
+            
+            #self.guard.set_riden_vbat(self.v_out if self.riden.available else None)
 
             # ---- Battery guard override (solar-only policy) ----
             # block_discharge -> battery at/below floor: the PID may only
@@ -410,23 +411,24 @@ class SMainBat:
             #                   is clamped to 0 W. NEVER import from grid.
             # block_charge    -> battery full: the PID may only discharge;
             #                   the charger is never used.
-            self.guard_mode = self.guard.mode()
-            if self.guard_mode != self._last_guard_mode:
-                print(f"{BRIGHT_RED}BATTERY GUARD: {self._last_guard_mode} -> "
-                      f"{self.guard_mode} (src: {self.guard.confidence()}, "
-                      f"soc: {self.guard.soc()}%){RESET}")
-                self._last_guard_mode = self.guard_mode
+            
+            # self.guard_mode = self.guard.mode()
+            # if self.guard_mode != self._last_guard_mode:
+            #     print(f"{BRIGHT_RED}BATTERY GUARD: {self._last_guard_mode} -> "
+            #           f"{self.guard_mode} (src: {self.guard.confidence()}, "
+            #           f"soc: {self.guard.soc()}%){RESET}")
+            #     self._last_guard_mode = self.guard_mode
 
-            if self.guard_mode == MODE_BLOCK_CHARGE:
-                # Battery full: the PID may only discharge (inverter);
-                # clamp the charge direction so the charger is never used.
-                if self.min_output < 0.0:
-                    self.min_output = 0.0
-            elif self.guard_mode == MODE_BLOCK_DISCHARGE:
-                # Battery empty: the PID may only charge (solar surplus
-                # only) or idle; clamp the discharge direction to zero.
-                if self.max_output > 0.0:
-                    self.max_output = 0.0
+            # if self.guard_mode == MODE_BLOCK_CHARGE:
+            #     # Battery full: the PID may only discharge (inverter);
+            #     # clamp the charge direction so the charger is never used.
+            #     if self.min_output < 0.0:
+            #         self.min_output = 0.0
+            # elif self.guard_mode == MODE_BLOCK_DISCHARGE:
+            #     # Battery empty: the PID may only charge (solar surplus
+            #     # only) or idle; clamp the discharge direction to zero.
+            #     if self.max_output > 0.0:
+            #         self.max_output = 0.0
 
             power_diff = import_p - export_p-0.02 - P_adding
             if abs(power_diff) < 0.02:
